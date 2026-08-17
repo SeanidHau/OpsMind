@@ -1,0 +1,53 @@
+[project]
+name = "opsmind"
+version = "0.1.0"
+description = "An agent harness benchmarked by incident diagnosis workflows."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+
+# 第一阶段声明工程基础依赖；具体模型供应商适配包在接入模型时按需加入。
+dependencies = [
+    "asyncpg>=0.30,<1.0",
+    "fastapi>=0.115,<1.0",
+    "langchain>=1.0,<2.0",
+    "langgraph>=1.0,<2.0",
+    "langsmith>=0.3,<1.0",
+    "pydantic>=2.10,<3.0",
+    "pydantic-settings>=2.7,<3.0",
+    "qdrant-client>=1.14,<2.0",
+    "sqlalchemy[asyncio]>=2.0,<3.0",
+    "structlog>=25.0,<26.0",
+    "tenacity>=9.0,<10.0",
+    "uvicorn[standard]>=0.34,<1.0",
+]
+
+[dependency-groups]
+dev = [
+    # 测试、静态检查与格式化工具。
+    "mypy>=1.15,<2.0",
+    "pytest>=8.3,<10.0",
+    "pytest-asyncio>=0.25,<1.0",
+    "pytest-cov>=6.0,<8.0",
+    "ruff>=0.11,<1.0",
+]
+
+[tool.ruff]
+# 统一格式和静态检查目标版本。
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv", "data/runtime"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC"]
+
+[tool.pytest.ini_options]
+# 所有测试从 tests/ 发现；异步测试默认自动识别。
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra"
+
+[tool.mypy]
+# 第一阶段起启用严格类型检查，避免 Harness 状态对象后期失控。
+python_version = "3.12"
+strict = true
+files = ["app"]
