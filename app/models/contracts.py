@@ -68,6 +68,60 @@ class ProgressStatus(StrEnum):
     COMPLETED = "completed"
 
 
+class ToolRiskLevel(StrEnum):
+    """工具的风险等级，用于决定是否需要人工审批。"""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class PolicyOutcome(StrEnum):
+    """策略层对候选动作给出的决策。"""
+
+    ALLOW = "allow"
+    BLOCK = "block"
+    REQUIRE_APPROVAL = "require_approval"
+
+
+class BudgetConsumption(BaseModel):
+    """描述一个候选动作预计消耗的资源。
+
+    该对象只表达“计划消耗”，不会直接修改 BudgetState。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    steps: int = Field(default=0, ge=0)
+    tool_calls: int = Field(default=0, ge=0)
+    model_calls: int = Field(default=0, ge=0)
+    tokens: int = Field(default=0, ge=0)
+    runtime_seconds: int = Field(default=0, ge=0)
+    estimated_cost_usd: float = Field(default=0.0, ge=0)
+
+
+class ToolPolicy(BaseModel):
+    """单个工具的注册信息与执行风险策略。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=100)
+    risk_level: ToolRiskLevel
+    read_only: bool = False
+    requires_approval: bool = False
+
+
+class PolicyDecision(BaseModel):
+    """单个工具的注册信息与执行风险策略。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: PolicyOutcome
+    reason: str = Field(min_length=1, max_length=2_000)
+    consumption: BudgetConsumption
+    violations: tuple[str, ...] = ()
+
+
 class PlanItem(BaseModel):
     """一个可独立跟踪、可完成或可阻塞的任务计划项。"""
 
@@ -243,10 +297,15 @@ __all__ = [
     "ActionType",
     "AgentAction",
     "AgentEvent",
+    "BudgetConsumption",
     "BudgetState",
     "DiagnosisState",
     "EventType",
     "PlanItem",
     "PlanStatus",
+    "PolicyDecision",
+    "PolicyOutcome",
     "ProgressStatus",
+    "ToolPolicy",
+    "ToolRiskLevel",
 ]
