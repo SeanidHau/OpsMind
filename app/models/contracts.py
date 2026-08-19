@@ -84,6 +84,15 @@ class PolicyOutcome(StrEnum):
     REQUIRE_APPROVAL = "require_approval"
 
 
+class HarnessStatus(StrEnum):
+    """Harness Loop 的终止或暂停状态。"""
+
+    COMPLETED = "completed"
+    BLOCKED = "blocked"
+    WAITING_APPROVAL = "waiting_approval"
+    FAILED = "failed"
+
+
 class BudgetConsumption(BaseModel):
     """描述一个候选动作预计消耗的资源。
 
@@ -112,7 +121,7 @@ class ToolPolicy(BaseModel):
 
 
 class PolicyDecision(BaseModel):
-    """单个工具的注册信息与执行风险策略。"""
+    """策略层对候选动作给出的决策结果"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -271,6 +280,9 @@ class DiagnosisState(TypedDict):
     budget: BudgetState
     trajectory: list[AgentEvent]
     progress_status: ProgressStatus | None
+    current_action: NotRequired[AgentAction | None]
+    policy_decision: NotRequired[PolicyDecision | None]
+    terminal_status: NotRequired[HarnessStatus | None]
 
     # 诊断领域状态
     retrieved_documents: list[dict[str, Any]]
@@ -301,6 +313,7 @@ __all__ = [
     "BudgetState",
     "DiagnosisState",
     "EventType",
+    "HarnessStatus",
     "PlanItem",
     "PlanStatus",
     "PolicyDecision",
