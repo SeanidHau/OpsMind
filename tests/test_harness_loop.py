@@ -4,8 +4,8 @@ from collections import deque
 from typing import Any
 
 import pytest
-from app.harness.loop import HarnessLoop, create_initial_state
 
+from app.harness.loop import HarnessLoop, create_initial_state
 from app.harness.policy import ActionPolicy
 from app.models.contracts import (
     ActionType,
@@ -13,6 +13,7 @@ from app.models.contracts import (
     BudgetState,
     EventType,
     HarnessStatus,
+    ProgressStatus,
     ToolPolicy,
     ToolRiskLevel,
 )
@@ -44,11 +45,11 @@ class RecordingToolExecutor:
         return {"status": "ok", "tool_name": action.tool_name}
 
 
-def make_budget(*, max_steps: int = 5) -> BudgetState:
+def make_budget(*, max_steps: int = 5, max_tool_calls: int = 3) -> BudgetState:
     """构造只关注步骤和工具调用次数的测试预算。"""
     return BudgetState(
         max_steps=max_steps,
-        max_tool_calls=3,
+        max_tool_calls=max_tool_calls,
         max_model_calls=3,
         max_tokens=1_000,
         max_runtime_seconds=60,
@@ -172,3 +173,23 @@ async def test_loop_stops_when_next_action_exceeds_budget() -> None:
     assert [action.tool_name for action in executor.actions] == ["query_metrics"]
     assert result["budget"].used_steps == 1
     assert result["trajectory"][-1].event_type is EventType.ACTION_BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_loop_stops_after_three_repeated_observations() -> None:
+    """连续三次无新观察时，Loop 必须终止以避免无效空转。"""
+    executor = RecordingToolExecutor()
+    loop = HarnessLoop(
+        action_provider=QueueActionProvider([tool_action("query_metrics")] * 4),
+        tool_executor=executor,
+        policy=ActionPolicy([ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)]),
+    )
+
+    result = await loop.run(make_state(budget=make_budget(max_tool_calls=5)))
+
+    assert result["terminal_status"] is HarnessStatus.STALLED
+    assert result["progress_status"] is ProgressStatus.STALLED
+    assert result["consecutive_stalls"] == 3
+    assert result["replan_requested"] is True
+    assert len(executor.actions) == 4
+    assert result["trajectory"][-1].event_type is EventType.VERIFICATION_FAILED

@@ -10,6 +10,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from app.harness.budget import BudgetManager
 from app.harness.policy import ActionPolicy
+from app.harness.progress import ProgressVerifier
 from app.models.contracts import (
     ActionType,
     AgentAction,
@@ -90,10 +91,12 @@ class HarnessLoop:
         action_provider: ActionProvider,
         tool_executor: ToolExecutor,
         policy: ActionPolicy,
+        progress_verifier: ProgressVerifier | None = None,
     ) -> None:
         self._action_provider = action_provider
         self._tool_executor = tool_executor
         self._policy = policy
+        self._progress_verifier = progress_verifier or ProgressVerifier()
         self._graph = self._build_graph()
 
     async def run(self, state: DiagnosisState) -> DiagnosisState:
@@ -110,6 +113,7 @@ class HarnessLoop:
         graph.add_node("propose_action", self._propose_action)
         graph.add_node("policy_check", self._policy_check)
         graph.add_node("execute_tool", self._execute_tool)
+        graph.add_node("verify_progress", self._verify_progress)
         graph.add_node("finish", self._finish)
 
         graph.add_edge(START, "propose_action")
@@ -125,6 +129,14 @@ class HarnessLoop:
         graph.add_conditional_edges(
             "execute_tool",
             self._route_after_tool,
+            {
+                "verify_progress": "verify_progress",
+                "finish": "finish",
+            },
+        )
+        graph.add_conditional_edges(
+            "verify_progress",
+            self._route_after_verification,
             {
                 "propose_action": "propose_action",
                 "finish": "finish",
@@ -149,6 +161,48 @@ class HarnessLoop:
             "current_action": action,
             "trajectory": [*state["trajectory"], event],
         }
+
+    def _verify_progress(self, state: DiagnosisState) -> dict[str, Any]:
+        """根据最近观察结果检测进展、重复调用与停滞。"""
+        action = self._require_current_action(state)
+        observation = state["tool_results"][-1] if state["tool_results"] else None
+        assessment = self._progress_verifier.assess(
+            action=action,
+            observation=observation,
+            previous_fingerprints=state.get("progress_fingerprints", []),
+            consecutive_stalls=state.get("consecutive_stalls", 0),
+        )
+
+        fingerprints = list(state.get("progress_fingerprints", []))
+        if assessment.fingerprint is not None and assessment.fingerprint not in fingerprints:
+            fingerprints.append(assessment.fingerprint)
+
+        updates: dict[str, Any] = {
+            "progress_assessment": assessment,
+            "progress_fingerprints": fingerprints,
+            "progress_status": assessment.status,
+            "consecutive_stalls": assessment.consecutive_stalls,
+        }
+        if assessment.should_replan:
+            updates["replan_requested"] = True
+
+        if assessment.should_stop:
+            event = self._new_event(
+                state,
+                event_type=EventType.VERIFICATION_FAILED,
+                node="verify_progress",
+                action=action,
+                decision=assessment.reason,
+            )
+            updates.update(
+                {
+                    "terminal_status": HarnessStatus.STALLED,
+                    "errors": [*state["errors"], assessment.reason],
+                    "trajectory": [*state["trajectory"], event],
+                }
+            )
+
+        return updates
 
     def _policy_check(self, state: DiagnosisState) -> dict[str, Any]:
         """在任何工具执行前完成策略检查和预算消费。"""
@@ -263,6 +317,12 @@ class HarnessLoop:
 
         action = self._require_current_action(state)
         if action.action_type is ActionType.FINAL_ANSWER:
+            assessment = self._progress_verifier.assess(
+                action=action,
+                observation=None,
+                previous_fingerprints=state.get("progress_fingerprints", []),
+                consecutive_stalls=state.get("consecutive_stalls", 0),
+            )
             event = self._new_event(
                 state,
                 event_type=EventType.RUN_COMPLETED,
@@ -272,6 +332,9 @@ class HarnessLoop:
             )
             return {
                 "terminal_status": HarnessStatus.COMPLETED,
+                "progress_assessment": assessment,
+                "progress_status": assessment.status,
+                "consecutive_stalls": assessment.consecutive_stalls,
                 "trajectory": [*state["trajectory"], event],
             }
 
@@ -302,8 +365,15 @@ class HarnessLoop:
 
     @staticmethod
     def _route_after_tool(state: DiagnosisState) -> str:
-        """工具失败时结束图；成功时继续请求下一动作。"""
+        """工具失败时结束图；成功时进入进度验证节点。"""
         if state.get("terminal_status") is HarnessStatus.FAILED:
+            return "finish"
+        return "verify_progress"
+
+    @staticmethod
+    def _route_after_verification(state: DiagnosisState) -> str:
+        """连续停滞达到上限后结束，否则继续请求下一动作。"""
+        if state.get("terminal_status") is HarnessStatus.STALLED:
             return "finish"
         return "propose_action"
 

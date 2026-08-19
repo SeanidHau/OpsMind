@@ -4,7 +4,7 @@ OpsMind 是一个面向长流程任务的 Agent Harness 项目，使用运维故
 
 ## 当前阶段
 
-项目初始化：完成工程规范、依赖管理、基础设施和测试骨架。业务代码尚未开始实现。
+Harness Core：已完成共享契约、预算与动作策略、LangGraph Harness Loop，以及 Progress Verifier 的停滞控制。下一阶段接入 Context Manager、RAG 和模拟诊断工具。
 
 ## 技术栈
 

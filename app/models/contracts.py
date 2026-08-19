@@ -90,6 +90,7 @@ class HarnessStatus(StrEnum):
     COMPLETED = "completed"
     BLOCKED = "blocked"
     WAITING_APPROVAL = "waiting_approval"
+    STALLED = "stalled"
     FAILED = "failed"
 
 
@@ -129,6 +130,19 @@ class PolicyDecision(BaseModel):
     reason: str = Field(min_length=1, max_length=2_000)
     consumption: BudgetConsumption
     violations: tuple[str, ...] = ()
+
+
+class ProgressAssessment(BaseModel):
+    """Progress Verifier 对单轮动作给出的可执行结论。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: ProgressStatus
+    reason: str = Field(min_length=1, max_length=2_000)
+    fingerprint: str | None = Field(default=None, max_length=8_000)
+    consecutive_stalls: int = Field(ge=0)
+    should_replan: bool = False
+    should_stop: bool = False
 
 
 class PlanItem(BaseModel):
@@ -283,6 +297,10 @@ class DiagnosisState(TypedDict):
     current_action: NotRequired[AgentAction | None]
     policy_decision: NotRequired[PolicyDecision | None]
     terminal_status: NotRequired[HarnessStatus | None]
+    progress_assessment: NotRequired[ProgressAssessment | None]
+    progress_fingerprints: NotRequired[list[str]]
+    consecutive_stalls: NotRequired[int]
+    replan_requested: NotRequired[bool]
 
     # 诊断领域状态
     retrieved_documents: list[dict[str, Any]]
@@ -316,6 +334,7 @@ __all__ = [
     "HarnessStatus",
     "PlanItem",
     "PlanStatus",
+    "ProgressAssessment",
     "PolicyDecision",
     "PolicyOutcome",
     "ProgressStatus",
