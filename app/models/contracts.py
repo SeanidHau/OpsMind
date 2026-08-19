@@ -94,6 +94,37 @@ class HarnessStatus(StrEnum):
     FAILED = "failed"
 
 
+class ContextSource(StrEnum):
+    """模型上下文条目的来源类型"""
+
+    TASK = "task"
+    PLAN = "plan"
+    ERROR = "error"
+    EVIDENCE = "evidence"
+    TOOL_RESULT = "tool_result"
+
+
+class ContextItem(BaseModel):
+    """一条可安全传入模型的最小上下文"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: ContextSource
+    reference: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=8_000)
+    priority: int = Field(ge=0, le=100)
+
+
+class ContextSnapshot(BaseModel):
+    """context Manager 输出的首先上下文快照"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ContextItem]
+    total_chars: int = Field(ge=0)
+    truncated: bool
+
+
 class BudgetConsumption(BaseModel):
     """描述一个候选动作预计消耗的资源。
 
@@ -313,6 +344,9 @@ class DiagnosisState(TypedDict):
     approval_request: dict[str, Any] | None
     ticket: dict[str, Any] | None
 
+    # Context Manager 在每次动作提出前构建的最小模型上下文
+    model_context: NotRequired[ContextSnapshot | None]
+
     retry_count: int
     question_count: int
     tool_call_count: int
@@ -329,6 +363,9 @@ __all__ = [
     "AgentEvent",
     "BudgetConsumption",
     "BudgetState",
+    "ContextSnapshot",
+    "ContextSnapshot",
+    "ContextSource",
     "DiagnosisState",
     "EventType",
     "HarnessStatus",

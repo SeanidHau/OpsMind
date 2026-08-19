@@ -9,6 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from app.harness.budget import BudgetManager
+from app.harness.context import ContextManager
 from app.harness.policy import ActionPolicy
 from app.harness.progress import ProgressVerifier
 from app.models.contracts import (
@@ -92,11 +93,13 @@ class HarnessLoop:
         tool_executor: ToolExecutor,
         policy: ActionPolicy,
         progress_verifier: ProgressVerifier | None = None,
+        context_manager: ContextManager | None = None,
     ) -> None:
         self._action_provider = action_provider
         self._tool_executor = tool_executor
         self._policy = policy
         self._progress_verifier = progress_verifier or ProgressVerifier()
+        self._context_manager = context_manager or ContextManager()
         self._graph = self._build_graph()
 
     async def run(self, state: DiagnosisState) -> DiagnosisState:
@@ -114,9 +117,11 @@ class HarnessLoop:
         graph.add_node("policy_check", self._policy_check)
         graph.add_node("execute_tool", self._execute_tool)
         graph.add_node("verify_progress", self._verify_progress)
+        graph.add_node("build_context", self._build_context)
         graph.add_node("finish", self._finish)
 
-        graph.add_edge(START, "propose_action")
+        graph.add_edge(START, "build_context")
+        graph.add_edge("build_context", "propose_action")
         graph.add_edge("propose_action", "policy_check")
         graph.add_conditional_edges(
             "policy_check",
@@ -138,6 +143,7 @@ class HarnessLoop:
             "verify_progress",
             self._route_after_verification,
             {
+                "build_context": "build_context",
                 "propose_action": "propose_action",
                 "finish": "finish",
             },
@@ -314,6 +320,22 @@ class HarnessLoop:
 
         return updates
 
+    def _build_context(self, state: DiagnosisState) -> dict[str, Any]:
+        """构建最小上下文，再允许动作提供器读取当前状态。"""
+        snapshot = self._context_manager.build(state)
+        event = self._new_event(
+            state,
+            event_type=EventType.CONTEXT_BUILT,
+            node="build_context",
+            observation=snapshot.model_dump(mode="json"),
+        )
+
+        return {
+            "model_context": snapshot,
+            "context_refs": [item.reference for item in snapshot.items],
+            "trajectory": [*state["trajectory"], event],
+        }
+
     def _finish(self, state: DiagnosisState) -> dict[str, Any]:
         """为正常结束补充终止状态和完成事件。"""
         if state.get("terminal_status") is not None:
@@ -376,10 +398,10 @@ class HarnessLoop:
 
     @staticmethod
     def _route_after_verification(state: DiagnosisState) -> str:
-        """连续停滞达到上限后结束，否则继续请求下一动作。"""
+        """连续停滞达到上限后结束，否则重建上下文并继续。"""
         if state.get("terminal_status") is HarnessStatus.STALLED:
             return "finish"
-        return "propose_action"
+        return "build_context"
 
     @staticmethod
     def _require_current_action(state: DiagnosisState) -> AgentAction:

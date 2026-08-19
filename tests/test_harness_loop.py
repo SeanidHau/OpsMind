@@ -24,10 +24,11 @@ class QueueActionProvider:
 
     def __init__(self, actions: list[AgentAction]) -> None:
         self._actions = deque(actions)
+        self.received_contexts: list[Any] = []
 
     async def propose_action(self, state: dict[str, Any]) -> AgentAction:
         """返回下一个动作；队列耗尽代表 Loop 意外多执行了一轮。"""
-        del state
+        self.received_contexts.append(state.get("model_context"))
         if not self._actions:
             raise AssertionError("action provider was called after its queue was exhausted")
         return self._actions.popleft()
@@ -108,6 +109,23 @@ async def test_loop_executes_allowed_tool_then_completes() -> None:
     assert EventType.ACTION_PROPOSED in [event.event_type for event in result["trajectory"]]
     assert EventType.TOOL_FINISHED in [event.event_type for event in result["trajectory"]]
     assert result["trajectory"][-1].event_type is EventType.RUN_COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_loop_builds_context_before_requesting_an_action() -> None:
+    """动作提供器只能收到 ContextManager 已构建的最小上下文。"""
+    provider = QueueActionProvider([final_action()])
+    loop = HarnessLoop(
+        action_provider=provider,
+        tool_executor=RecordingToolExecutor(),
+        policy=ActionPolicy([]),
+    )
+
+    result = await loop.run(make_state(budget=make_budget()))
+
+    assert provider.received_contexts[0] is not None
+    assert provider.received_contexts[0].items[0].source.value == "task"
+    assert result["trajectory"][0].event_type is EventType.CONTEXT_BUILT
 
 
 @pytest.mark.asyncio
