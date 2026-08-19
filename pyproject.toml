@@ -43,6 +43,7 @@ select = ["E", "F", "I", "B", "UP", "ASYNC"]
 [tool.pytest.ini_options]
 # 所有测试从 tests/ 发现；异步测试默认自动识别。
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 addopts = "-ra"
 
