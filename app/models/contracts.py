@@ -152,6 +152,33 @@ class ToolPolicy(BaseModel):
     requires_approval: bool = False
 
 
+class ToolDefinition(BaseModel):
+    """工具注册表使用的静态定义。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=1_000)
+    risk_level: ToolRiskLevel
+    required_args: tuple[str, ...] = ()
+    allowed_args: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_argument_schema(self) -> Self:
+        """保证参数声明没有重复，且必填参数属于允许参数集合。"""
+        if len(set(self.required_args)) != len(self.required_args):
+            raise ValueError("required_args must not contain duplicates")
+        if len(set(self.allowed_args)) != len(self.allowed_args):
+            raise ValueError("allowed_args must not contain duplicates")
+
+        missing_allowed_args = set(self.required_args) - set(self.allowed_args)
+        if missing_allowed_args:
+            name = ", ".join(sorted(missing_allowed_args))
+            raise ValueError(f"required_args must be included in allowed_args: {name}")
+
+        return self
+
+
 class PolicyDecision(BaseModel):
     """策略层对候选动作给出的决策结果"""
 
@@ -375,6 +402,7 @@ __all__ = [
     "PolicyOutcome",
     "ProgressAssessment",
     "ProgressStatus",
+    "ToolDefinition",
     "ToolPolicy",
     "ToolRiskLevel",
 ]
