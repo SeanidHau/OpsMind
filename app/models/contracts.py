@@ -225,6 +225,28 @@ class ProgressAssessment(BaseModel):
     should_stop: bool = False
 
 
+class KnowledgeDocument(BaseModel):
+    """进入 RAG Ingestion Pipeline 的原始知识文档"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1)
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class KnowledgeChunk(BaseModel):
+    """可被关键词和向量检索共同使用的稳定知识分块。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_id: str = Field(min_length=1, max_length=64)
+    source_id: str = Field(min_length=1, max_length=200)
+    index: int = Field(default=0)
+    content: str = Field(min_length=1)
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
 class PlanItem(BaseModel):
     """一个可独立跟踪、可完成或可阻塞的任务计划项。"""
 
@@ -419,6 +441,8 @@ __all__ = [
     "EventType",
     "HarnessStatus",
     "IncidentScenario",
+    "KnowledgeChunk",
+    "KnowledgeDocument",
     "PlanItem",
     "PlanStatus",
     "PolicyDecision",
