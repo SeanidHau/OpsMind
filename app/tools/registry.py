@@ -75,7 +75,7 @@ class ToolRegistry:
             names = ", ".join(missing_args)
             raise ToolExecutionError(f"missing required args: {names}")
 
-        unexpected_args = sorted(argument_names - set(definition.required_args))
+        unexpected_args = sorted(argument_names - set(definition.allowed_args))
         if unexpected_args:
             names = ", ".join(unexpected_args)
             raise ToolExecutionError(f"unexpected args: {names}")
