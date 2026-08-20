@@ -257,6 +257,17 @@ class RetrievalHit(BaseModel):
     rank: int = Field(ge=1)
 
 
+class FusedRetrievalHit(BaseModel):
+    """RRF 融合后的知识分块及其来源。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chunk: KnowledgeChunk
+    score: float = Field(ge=0)
+    rank: int = Field(ge=1)
+    retriever_names: list[str] = Field(min_length=1)
+
+
 class PlanItem(BaseModel):
     """一个可独立跟踪、可完成或可阻塞的任务计划项。"""
 
@@ -449,6 +460,7 @@ __all__ = [
     "ContextSource",
     "DiagnosisState",
     "EventType",
+    "FusedRetrievalHit",
     "HarnessStatus",
     "IncidentScenario",
     "KnowledgeChunk",
