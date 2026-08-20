@@ -247,6 +247,15 @@ class KnowledgeChunk(BaseModel):
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
+class VectorizedChunk(BaseModel):
+    """包含预计算向量的稳定知识分块。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chunk: KnowledgeChunk
+    vector: list[float] = Field(min_length=1)
+
+
 class RetrievalHit(BaseModel):
     """一次检索返回的带分数与排名的知识分块。"""
 
@@ -476,4 +485,5 @@ __all__ = [
     "ToolDefinition",
     "ToolPolicy",
     "ToolRiskLevel",
+    "VectorizedChunk",
 ]
