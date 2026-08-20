@@ -247,6 +247,16 @@ class KnowledgeChunk(BaseModel):
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
+class RetrievalHit(BaseModel):
+    """一次检索返回的带分数与排名的知识分块。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chunk: KnowledgeChunk
+    score: float = Field(ge=0)
+    rank: int = Field(ge=1)
+
+
 class PlanItem(BaseModel):
     """一个可独立跟踪、可完成或可阻塞的任务计划项。"""
 
@@ -449,6 +459,7 @@ __all__ = [
     "PolicyOutcome",
     "ProgressAssessment",
     "ProgressStatus",
+    "RetrievalHit",
     "ScenarioLog",
     "ToolDefinition",
     "ToolPolicy",
