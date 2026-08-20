@@ -179,6 +179,28 @@ class ToolDefinition(BaseModel):
         return self
 
 
+class ScenarioLog(BaseModel):
+    """固定故障场景中的单挑结构化日志"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp: str = Field(min_length=1, max_length=100)
+    level: str = Field(min_length=1, max_length=20)
+    message: str = Field(min_length=1, max_length=4_000)
+
+
+class IncidentScenario(BaseModel):
+    """供模拟诊断工具读取的可复现故障场景。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_id: str = Field(min_length=1, max_length=100)
+    service: str = Field(min_length=1, max_length=100)
+    logs: list[ScenarioLog] = Field(default_factory=list)
+    metrics: dict[str, float] = Field(default_factory=dict)
+    dependencies: list[str] = Field(default_factory=list)
+
+
 class PolicyDecision(BaseModel):
     """策略层对候选动作给出的决策结果"""
 
@@ -396,12 +418,14 @@ __all__ = [
     "DiagnosisState",
     "EventType",
     "HarnessStatus",
+    "IncidentScenario",
     "PlanItem",
     "PlanStatus",
     "PolicyDecision",
     "PolicyOutcome",
     "ProgressAssessment",
     "ProgressStatus",
+    "ScenarioLog",
     "ToolDefinition",
     "ToolPolicy",
     "ToolRiskLevel",
