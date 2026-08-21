@@ -40,6 +40,7 @@ class EventType(StrEnum):
     ACTION_BLOCKED = "action_blocked"
     TOOL_STARTED = "tool_started"
     TOOL_FINISHED = "tool_finished"
+    TOOL_RETRY = "tool_retry"
     OBSERVATION_RECORDED = "observation_recorded"
     VERIFICATION_FAILED = "verification_failed"
     CONTEXT_COMPRESSED = "context_compressed"

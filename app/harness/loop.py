@@ -16,6 +16,7 @@ from app.models.contracts import (
     ActionType,
     AgentAction,
     AgentEvent,
+    BudgetConsumption,
     BudgetState,
     DiagnosisState,
     EventType,
@@ -94,12 +95,17 @@ class HarnessLoop:
         policy: ActionPolicy,
         progress_verifier: ProgressVerifier | None = None,
         context_manager: ContextManager | None = None,
+        max_tool_retries: int = 2,
     ) -> None:
+        if max_tool_retries < 0:
+            raise ValueError("max_tool_retries must not be negative")
+
         self._action_provider = action_provider
         self._tool_executor = tool_executor
         self._policy = policy
         self._progress_verifier = progress_verifier or ProgressVerifier()
         self._context_manager = context_manager or ContextManager()
+        self._max_tool_retries = max_tool_retries
         self._graph = self._build_graph()
 
     async def run(self, state: DiagnosisState) -> DiagnosisState:
@@ -135,6 +141,7 @@ class HarnessLoop:
             "execute_tool",
             self._route_after_tool,
             {
+                "retry_tool": "execute_tool",
                 "verify_progress": "verify_progress",
                 "finish": "finish",
             },
@@ -231,6 +238,47 @@ class HarnessLoop:
             result = await self._tool_executor.execute(action)
         except Exception as error:
             error_text = str(error)[:4_000]
+            retry_count = state["retry_count"] + 1
+            attempted_tool_calls = state["tool_call_count"] + 1
+
+            if retry_count <= self._max_tool_retries:
+                # 重试不再调用模型或策略，但每一次真实工具尝试必须消耗工具预算。
+                retry_consumption = BudgetConsumption(tool_calls=1)
+                exceeded = BudgetManager.exceeded_dimensions(state["budget"], retry_consumption)
+
+                if not exceeded:
+                    retry_event = self._new_event(
+                        state,
+                        event_type=EventType.TOOL_RETRY,
+                        node="execute_tool",
+                        action=action,
+                        decision=f"工具调用失败，准备第 {retry_count} 次重试。",
+                        error=error_text,
+                    )
+                    return {
+                        "budget": BudgetManager.consume(state["budget"], retry_consumption),
+                        "retry_count": retry_count,
+                        "tool_call_count": attempted_tool_calls,
+                        "trajectory": [*state["trajectory"], started_event, retry_event],
+                    }
+
+                block_reason = "工具重试会超出本次运行预算。"
+                blocked_event = self._new_event(
+                    state,
+                    event_type=EventType.ACTION_BLOCKED,
+                    node="execute_tool",
+                    action=action,
+                    decision=block_reason,
+                    error=error_text,
+                )
+                return {
+                    "terminal_status": HarnessStatus.BLOCKED,
+                    "retry_count": retry_count,
+                    "tool_call_count": attempted_tool_calls,
+                    "errors": [*state["errors"], block_reason],
+                    "trajectory": [*state["trajectory"], started_event, blocked_event],
+                }
+
             failed_event = self._new_event(
                 state,
                 event_type=EventType.RUN_FAILED,
@@ -240,6 +288,8 @@ class HarnessLoop:
             )
             return {
                 "terminal_status": HarnessStatus.FAILED,
+                "retry_count": retry_count,
+                "tool_call_count": attempted_tool_calls,
                 "errors": [*state["errors"], error_text],
                 "trajectory": [*state["trajectory"], started_event, failed_event],
             }
@@ -264,6 +314,8 @@ class HarnessLoop:
         }
 
         return {
+            # 成功后清零连续重试计数，下一次工具调用重新计算重试次数。
+            "retry_count": 0,
             "tool_results": [*state["tool_results"], observation],
             "tool_call_count": state["tool_call_count"] + 1,
             "trajectory": [
@@ -391,9 +443,11 @@ class HarnessLoop:
 
     @staticmethod
     def _route_after_tool(state: DiagnosisState) -> str:
-        """工具失败时结束图；成功时进入进度验证节点。"""
-        if state.get("terminal_status") is HarnessStatus.FAILED:
+        """按工具执行结果选择重试、验证进度或结束运行。"""
+        if state.get("terminal_status") is not None:
             return "finish"
+        if state["retry_count"] > 0:
+            return "retry_tool"
         return "verify_progress"
 
     @staticmethod
