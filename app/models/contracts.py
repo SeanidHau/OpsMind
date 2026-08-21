@@ -303,6 +303,18 @@ class PlanItem(BaseModel):
     notes: str | None = None
 
 
+class DiagnosisReport(BaseModel):
+    """包含可追溯证据引用的结构化诊断报告。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = Field(min_length=1, max_length=4_000)
+    probable_root_cause: str = Field(min_length=1, max_length=2_000)
+    confidence: float = Field(ge=0, le=1)
+    evidence_ids: list[str] = Field(min_length=1)
+    recommended_actions: list[str] = Field(min_length=1)
+
+
 class BudgetState(BaseModel):
     """记录一次运行允许消耗和已经消耗的资源。"""
 
@@ -480,6 +492,7 @@ __all__ = [
     "ContextSnapshot",
     "ContextSnapshot",
     "ContextSource",
+    "DiagnosisState",
     "DiagnosisState",
     "EventType",
     "EvidenceItem",
