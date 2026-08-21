@@ -116,7 +116,8 @@ async def test_loop_blocks_before_calling_model_after_budget_is_exhausted() -> N
     assert provider.calls == 1
     assert result["budget"].used_model_calls == 1
     assert result["tool_call_count"] == 1
-    assert result["trajectory"][-1].event_type is EventType.ACTION_BLOCKED
+    assert result["trajectory"][-2].event_type is EventType.ACTION_BLOCKED
+    assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
 
 
 def test_budget_contract_rejects_zero_model_budget() -> None:

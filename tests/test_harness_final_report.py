@@ -119,4 +119,5 @@ async def test_final_answer_with_unknown_report_reference_is_blocked() -> None:
 
     assert result["terminal_status"] is HarnessStatus.BLOCKED
     assert result["errors"][-1] == f"unknown evidence references: {'b' * 64}"
-    assert result["trajectory"][-1].event_type is EventType.VERIFICATION_FAILED
+    assert result["trajectory"][-2].event_type is EventType.VERIFICATION_FAILED
+    assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED

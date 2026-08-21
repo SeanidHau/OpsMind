@@ -118,7 +118,8 @@ async def test_loop_executes_allowed_tool_then_completes() -> None:
     ]
     assert EventType.ACTION_PROPOSED in [event.event_type for event in result["trajectory"]]
     assert EventType.TOOL_FINISHED in [event.event_type for event in result["trajectory"]]
-    assert result["trajectory"][-1].event_type is EventType.RUN_COMPLETED
+    assert result["trajectory"][-2].event_type is EventType.RUN_COMPLETED
+    assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
 
 
 @pytest.mark.asyncio
@@ -164,7 +165,8 @@ async def test_loop_pauses_for_high_risk_tool_without_executing_it() -> None:
     }
     assert executor.actions == []
     assert result["budget"].used_steps == 0
-    assert result["trajectory"][-1].event_type is EventType.RUN_PAUSED
+    assert result["trajectory"][-2].event_type is EventType.RUN_PAUSED
+    assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
 
 
 @pytest.mark.asyncio
@@ -182,7 +184,8 @@ async def test_loop_blocks_unknown_tool_before_execution() -> None:
     assert result["terminal_status"] is HarnessStatus.BLOCKED
     assert executor.actions == []
     assert result["errors"] == ["请求的工具未在当前运行中注册。"]
-    assert result["trajectory"][-1].event_type is EventType.ACTION_BLOCKED
+    assert result["trajectory"][-2].event_type is EventType.ACTION_BLOCKED
+    assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
 
 
 @pytest.mark.asyncio
@@ -200,7 +203,8 @@ async def test_loop_stops_when_next_action_exceeds_budget() -> None:
     assert result["terminal_status"] is HarnessStatus.BLOCKED
     assert [action.tool_name for action in executor.actions] == ["query_metrics"]
     assert result["budget"].used_steps == 1
-    assert result["trajectory"][-1].event_type is EventType.ACTION_BLOCKED
+    assert result["trajectory"][-2].event_type is EventType.ACTION_BLOCKED
+    assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
 
 
 @pytest.mark.asyncio
@@ -220,4 +224,5 @@ async def test_loop_stops_after_three_repeated_observations() -> None:
     assert result["consecutive_stalls"] == 3
     assert result["replan_requested"] is True
     assert len(executor.actions) == 4
-    assert result["trajectory"][-1].event_type is EventType.VERIFICATION_FAILED
+    assert result["trajectory"][-2].event_type is EventType.VERIFICATION_FAILED
+    assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED

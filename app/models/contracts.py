@@ -440,6 +440,22 @@ class AgentEvent(BaseModel):
     error: str | None = Field(default=None, max_length=4_000)
 
 
+class RunSnapshot(BaseModel):
+    """一次 Harness 运行结束后的不可变、可重放快照。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID
+    session_id: str = Field(min_length=1, max_length=200)
+    thread_id: str = Field(min_length=1, max_length=200)
+    terminal_status: HarnessStatus | None
+
+    # 状态不重复保存 trajectory；其中所有值均已转换为 JSON 兼容类型。
+    final_state: dict[str, Any]
+    trajectory: list[AgentEvent]
+    captured_at: datetime = Field(default_factory=utc_now)
+
+
 class DiagnosisState(TypedDict):
     """LangGraph 节点间传递的完整诊断状态。"""
 
@@ -519,6 +535,7 @@ __all__ = [
     "ProgressAssessment",
     "ProgressStatus",
     "RetrievalHit",
+    "RunSnapshot",
     "ScenarioLog",
     "ToolDefinition",
     "ToolPolicy",

@@ -104,7 +104,8 @@ async def test_final_answer_without_evidence_is_blocked() -> None:
 
     assert result["terminal_status"] is HarnessStatus.BLOCKED
     assert result["errors"][-1] == "final answer requires at least 1 evidence items"
-    assert result["trajectory"][-1].event_type is EventType.VERIFICATION_FAILED
+    assert result["trajectory"][-2].event_type is EventType.VERIFICATION_FAILED
+    assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
 
 
 @pytest.mark.asyncio

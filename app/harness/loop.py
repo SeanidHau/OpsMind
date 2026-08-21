@@ -14,6 +14,7 @@ from app.harness.evidence import EvidenceCollector, EvidenceGate
 from app.harness.policy import ActionPolicy
 from app.harness.progress import ProgressVerifier
 from app.harness.report_renderer import MarkdownReportRenderer
+from app.harness.snapshot import InMemoryRunArchive, RunArchive, RunSnapshotFactory
 from app.models.contracts import (
     ActionType,
     AgentAction,
@@ -103,6 +104,7 @@ class HarnessLoop:
         evidence_collector: EvidenceCollector | None = None,
         evidence_gate: EvidenceGate | None = None,
         report_renderer: MarkdownReportRenderer | None = None,
+        run_archive: RunArchive | None = None,
     ) -> None:
         if max_tool_retries < 0:
             raise ValueError("max_tool_retries must not be negative")
@@ -116,12 +118,33 @@ class HarnessLoop:
         self._evidence_collector = evidence_collector or EvidenceCollector()
         self._evidence_gate = evidence_gate or EvidenceGate()
         self._report_renderer = report_renderer or MarkdownReportRenderer()
+        self._run_archive = run_archive or InMemoryRunArchive()
+        self._snapshot_factory = RunSnapshotFactory()
         self._graph = self._build_graph()
 
     async def run(self, state: DiagnosisState) -> DiagnosisState:
-        """运行编译后的 LangGraph，返回最终状态。"""
-        result = await self._graph.ainvoke(state)
-        return cast(DiagnosisState, result)
+        """运行图，并将结束状态保存为可重放快照。"""
+        result = cast(DiagnosisState, await self._graph.ainvoke(state))
+
+        checkpoint_event = self._new_event(
+            result,
+            event_type=EventType.CHECKPOINT_SAVED,
+            node="run_archive",
+            observation={"run_id": result["run_id"]},
+            decision="运行快照已保存。",
+        )
+        result_with_checkpoint = cast(
+            DiagnosisState,
+            {
+                **result,
+                "trajectory": [*result["trajectory"], checkpoint_event],
+            },
+        )
+
+        # 先把 checkpoint 事件写入快照，再归档，保证回放轨迹完整。
+        snapshot = self._snapshot_factory.build(result_with_checkpoint)
+        self._run_archive.save(snapshot)
+        return result_with_checkpoint
 
     def _build_graph(
         self,

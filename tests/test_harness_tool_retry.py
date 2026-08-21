@@ -136,7 +136,8 @@ async def test_loop_fails_after_retry_limit_is_exhausted() -> None:
     assert provider.calls == 1
     assert result["retry_count"] == 2
     assert result["tool_call_count"] == 2
-    assert result["trajectory"][-1].event_type is EventType.RUN_FAILED
+    assert result["trajectory"][-2].event_type is EventType.RUN_FAILED
+    assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
 
 
 @pytest.mark.asyncio
@@ -152,7 +153,8 @@ async def test_loop_blocks_retry_that_exceeds_tool_budget() -> None:
     assert result["terminal_status"] is HarnessStatus.BLOCKED
     assert executor.attempts == 1
     assert result["budget"].used_tool_calls == 1
-    assert result["trajectory"][-1].event_type is EventType.ACTION_BLOCKED
+    assert result["trajectory"][-2].event_type is EventType.ACTION_BLOCKED
+    assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
 
 
 def test_loop_rejects_negative_retry_limit() -> None:
