@@ -10,7 +10,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from app.harness.budget import BudgetManager
 from app.harness.context import ContextManager
-from app.harness.evidence import EvidenceCollector
+from app.harness.evidence import EvidenceCollector, EvidenceGate
 from app.harness.policy import ActionPolicy
 from app.harness.progress import ProgressVerifier
 from app.models.contracts import (
@@ -98,6 +98,7 @@ class HarnessLoop:
         context_manager: ContextManager | None = None,
         max_tool_retries: int = 2,
         evidence_collector: EvidenceCollector | None = None,
+        evidence_gate: EvidenceGate | None = None,
     ) -> None:
         if max_tool_retries < 0:
             raise ValueError("max_tool_retries must not be negative")
@@ -109,6 +110,7 @@ class HarnessLoop:
         self._context_manager = context_manager or ContextManager()
         self._max_tool_retries = max_tool_retries
         self._evidence_collector = evidence_collector or EvidenceCollector()
+        self._evidence_gate = evidence_gate or EvidenceGate()
         self._graph = self._build_graph()
 
     async def run(self, state: DiagnosisState) -> DiagnosisState:
@@ -456,6 +458,21 @@ class HarnessLoop:
 
         action = self._require_current_action(state)
         if action.action_type is ActionType.FINAL_ANSWER:
+            validation_error = self._evidence_gate.validate(state["evidence"])
+            if validation_error is not None:
+                verification_event = self._new_event(
+                    state,
+                    event_type=EventType.VERIFICATION_FAILED,
+                    node="finish",
+                    action=action,
+                    decision=validation_error,
+                )
+                return {
+                    "terminal_status": HarnessStatus.BLOCKED,
+                    "errors": [*state["errors"], validation_error],
+                    "trajectory": [*state["trajectory"], verification_event],
+                }
+
             event = self._new_event(
                 state,
                 event_type=EventType.RUN_COMPLETED,

@@ -46,3 +46,20 @@ class EvidenceCollector:
             content=normalized[: self._max_content_chars],
             truncated=truncated,
         )
+
+
+class EvidenceGate:
+    """检验最终回答是否拥有足够的结构化证据。"""
+
+    def __init__(self, *, min_evidence: int = 1) -> None:
+        """设置允许完成诊断所需的最小证据数量。"""
+        if min_evidence <= 0:
+            raise ValueError("min_evidence must be greater than 0")
+
+        self._min_evidence = min_evidence
+
+    def validate(self, evidence: list[EvidenceItem]) -> str | None:
+        """证据不足时返回阻断原因，满足门槛时返回 None。"""
+        if len(evidence) < self._min_evidence:
+            return f"final answer requires at least {self._min_evidence} evidence items"
+        return None
