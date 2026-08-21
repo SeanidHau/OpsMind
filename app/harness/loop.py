@@ -13,6 +13,7 @@ from app.harness.context import ContextManager
 from app.harness.evidence import EvidenceCollector, EvidenceGate
 from app.harness.policy import ActionPolicy
 from app.harness.progress import ProgressVerifier
+from app.harness.replay import CachedReplayService
 from app.harness.report_renderer import MarkdownReportRenderer
 from app.harness.snapshot import InMemoryRunArchive, RunArchive, RunSnapshotFactory
 from app.models.contracts import (
@@ -26,6 +27,7 @@ from app.models.contracts import (
     HarnessStatus,
     PolicyDecision,
     PolicyOutcome,
+    ReplayResult,
 )
 
 
@@ -119,6 +121,7 @@ class HarnessLoop:
         self._evidence_gate = evidence_gate or EvidenceGate()
         self._report_renderer = report_renderer or MarkdownReportRenderer()
         self._run_archive = run_archive or InMemoryRunArchive()
+        self._cached_replay = CachedReplayService(self._run_archive)
         self._snapshot_factory = RunSnapshotFactory()
         self._graph = self._build_graph()
 
@@ -145,6 +148,10 @@ class HarnessLoop:
         snapshot = self._snapshot_factory.build(result_with_checkpoint)
         self._run_archive.save(snapshot)
         return result_with_checkpoint
+
+    def replay_cached(self, run_id: UUID) -> ReplayResult:
+        """只读回放指定运行，不执行模型、工具或 LangGraph 节点。"""
+        return self._cached_replay.replay(run_id)
 
     def _build_graph(
         self,

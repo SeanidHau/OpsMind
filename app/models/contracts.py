@@ -96,6 +96,12 @@ class HarnessStatus(StrEnum):
     FAILED = "failed"
 
 
+class ReplayMode(StrEnum):
+    """运行回放的数据来源。"""
+
+    CACHED = "cached"
+
+
 class ContextSource(StrEnum):
     """模型上下文条目的来源类型"""
 
@@ -456,6 +462,21 @@ class RunSnapshot(BaseModel):
     captured_at: datetime = Field(default_factory=utc_now)
 
 
+class ReplayResult(BaseModel):
+    """一次只读回放返回的历史运行结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_run_id: UUID
+    mode: ReplayMode
+    terminal_status: HarnessStatus | None
+
+    # 保留历史最终状态和轨迹，不重新执行任何节点或工具。
+    final_state: dict[str, Any]
+    trajectory: list[AgentEvent]
+    replayed_at: datetime = Field(default_factory=utc_now)
+
+
 class DiagnosisState(TypedDict):
     """LangGraph 节点间传递的完整诊断状态。"""
 
@@ -534,6 +555,8 @@ __all__ = [
     "PolicyOutcome",
     "ProgressAssessment",
     "ProgressStatus",
+    "ReplayMode",
+    "ReplayResult",
     "RetrievalHit",
     "RunSnapshot",
     "ScenarioLog",
