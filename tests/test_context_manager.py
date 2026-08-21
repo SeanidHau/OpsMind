@@ -6,7 +6,7 @@ import pytest
 
 from app.harness.context import ContextManager
 from app.harness.loop import create_initial_state
-from app.models.contracts import BudgetState, ContextSource, PlanItem
+from app.models.contracts import BudgetState, ContextSource, EvidenceItem, PlanItem
 
 
 def make_state() -> dict[str, object]:
@@ -30,7 +30,13 @@ def make_state() -> dict[str, object]:
             rationale="先验证是否存在服务端异常。",
         )
     ]
-    state["evidence"] = [{"source": "metrics", "error_rate": 0.12}]
+    state["evidence"] = [
+        EvidenceItem(
+            evidence_id="e" * 64,
+            tool_name="query_metrics",
+            content='{"error_rate":0.12}',
+        )
+    ]
     state["tool_results"] = [
         {"tool_name": "query_metrics", "result": {"error_rate": 0.12}},
         {"tool_name": "query_metrics", "result": {"error_rate": 0.12}},
@@ -47,6 +53,7 @@ def test_build_keeps_task_context_and_deduplicates_tool_results() -> None:
 
     assert snapshot.items[0].source is ContextSource.TASK
     assert snapshot.items[0].reference == "user_query"
+    assert f"evidence:{'e' * 64}" in [item.reference for item in snapshot.items]
     assert sum(item.source is ContextSource.TOOL_RESULT for item in snapshot.items) == 1
     assert state == original_state
 

@@ -10,6 +10,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from app.harness.budget import BudgetManager
 from app.harness.context import ContextManager
+from app.harness.evidence import EvidenceCollector
 from app.harness.policy import ActionPolicy
 from app.harness.progress import ProgressVerifier
 from app.models.contracts import (
@@ -96,6 +97,7 @@ class HarnessLoop:
         progress_verifier: ProgressVerifier | None = None,
         context_manager: ContextManager | None = None,
         max_tool_retries: int = 2,
+        evidence_collector: EvidenceCollector | None = None,
     ) -> None:
         if max_tool_retries < 0:
             raise ValueError("max_tool_retries must not be negative")
@@ -106,6 +108,7 @@ class HarnessLoop:
         self._progress_verifier = progress_verifier or ProgressVerifier()
         self._context_manager = context_manager or ContextManager()
         self._max_tool_retries = max_tool_retries
+        self._evidence_collector = evidence_collector or EvidenceCollector()
         self._graph = self._build_graph()
 
     async def run(self, state: DiagnosisState) -> DiagnosisState:
@@ -294,6 +297,28 @@ class HarnessLoop:
                 "trajectory": [*state["trajectory"], started_event, failed_event],
             }
 
+        tool_name = action.tool_name
+        if tool_name is None:
+            raise RuntimeError("call_tool action requires tool_name")
+
+        evidence = self._evidence_collector.collect(
+            tool_name=tool_name,
+            observation=result,
+        )
+        updated_evidence = state["evidence"]
+        evidence_event = None
+
+        # 相同工具与相同观察结果只保留一条证据。
+        if all(item.evidence_id != evidence.evidence_id for item in state["evidence"]):
+            updated_evidence = [*state["evidence"], evidence]
+            evidence_event = self._new_event(
+                state,
+                event_type=EventType.EVIDENCE_COLLECTED,
+                node="execute_tool",
+                action=action,
+                observation=evidence.model_dump(mode="json"),
+            )
+
         finished_event = self._new_event(
             state,
             event_type=EventType.TOOL_FINISHED,
@@ -316,6 +341,7 @@ class HarnessLoop:
         return {
             # 成功后清零连续重试计数，下一次工具调用重新计算重试次数。
             "retry_count": 0,
+            "evidence": updated_evidence,
             "tool_results": [*state["tool_results"], observation],
             "tool_call_count": state["tool_call_count"] + 1,
             "trajectory": [
@@ -323,6 +349,7 @@ class HarnessLoop:
                 started_event,
                 finished_event,
                 observation_event,
+                *([evidence_event] if evidence_event is not None else []),
             ],
         }
 

@@ -49,6 +49,7 @@ class EventType(StrEnum):
     RUN_RESUMED = "run_resumed"
     RUN_COMPLETED = "run_completed"
     RUN_FAILED = "run_failed"
+    EVIDENCE_COLLECTED = "evidence_collected"
 
 
 class PlanStatus(StrEnum):
@@ -278,6 +279,17 @@ class FusedRetrievalHit(BaseModel):
     retriever_names: list[str] = Field(min_length=1)
 
 
+class EvidenceItem(BaseModel):
+    """由一次工具观察结果产生的可引用证据。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tool_name: str = Field(min_length=1, max_length=100)
+    content: str = Field(min_length=1, max_length=8_000)
+    truncated: bool = False
+
+
 class PlanItem(BaseModel):
     """一个可独立跟踪、可完成或可阻塞的任务计划项。"""
 
@@ -438,7 +450,7 @@ class DiagnosisState(TypedDict):
     # 诊断领域状态
     retrieved_documents: list[dict[str, Any]]
     tool_results: list[dict[str, Any]]
-    evidence: list[dict[str, Any]]
+    evidence: list[EvidenceItem]
     hypotheses: list[str]
     missing_information: list[str]
     diagnosis: dict[str, Any] | None
@@ -470,6 +482,7 @@ __all__ = [
     "ContextSource",
     "DiagnosisState",
     "EventType",
+    "EvidenceItem",
     "FusedRetrievalHit",
     "HarnessStatus",
     "IncidentScenario",

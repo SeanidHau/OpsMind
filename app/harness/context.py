@@ -94,11 +94,11 @@ class ContextManager:
         candidates.extend(
             ContextItem(
                 source=ContextSource.EVIDENCE,
-                reference=f"evidence:{index}",
-                content=self._serialize(evidence),
+                reference=f"evidence:{evidence.evidence_id}",
+                content=evidence.content,
                 priority=70,
             )
-            for index, evidence in enumerate(state["evidence"])
+            for evidence in state["evidence"]
         )
         candidates.extend(
             ContextItem(
@@ -129,7 +129,7 @@ class ContextManager:
         return unique_items
 
     @staticmethod
-    def _serialize(value: dict[str, Any]) -> str:
+    def _serialize(value: Any) -> str:
         """以稳定 JSON 表示结构化证据，方便去重和后续追踪。"""
         return json.dumps(
             value,
