@@ -4,9 +4,9 @@ import json
 from typing import Any
 
 import pytest
-from app.agents.action_provider import LangChainActionProvider
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
+from app.agents.action_provider import LangChainActionProvider
 from app.harness.loop import create_initial_state
 from app.models.contracts import (
     ActionType,
@@ -16,6 +16,7 @@ from app.models.contracts import (
     ContextSnapshot,
     ContextSource,
 )
+from tests.support import diagnosis_report
 
 
 class FakeStructuredRunnable:
@@ -107,6 +108,8 @@ async def test_provider_binds_agent_action_schema_and_uses_model_context() -> No
     assert payload["context"][1]["reference"] == "evidence:abc"
     assert "budget" not in payload
     assert "trajectory" not in payload
+    assert "final_answer 必须携带 report" in str(messages[0].content)
+    assert "evidence:<evidence_id>" in str(messages[0].content)
 
 
 @pytest.mark.asyncio
@@ -117,6 +120,7 @@ async def test_provider_validates_dictionary_response_against_action_contract() 
             "action_type": "final_answer",
             "intent": "输出当前结论",
             "reason": "证据已足够。",
+            "report": diagnosis_report().model_dump(mode="json"),
         }
     )
 

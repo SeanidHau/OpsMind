@@ -4,7 +4,6 @@ from collections import deque
 from typing import Any
 
 import pytest
-from app.tools.scenarios import ScenarioStore, register_scenario_tools
 
 from app.harness.loop import HarnessLoop, create_initial_state
 from app.harness.policy import ActionPolicy
@@ -17,6 +16,8 @@ from app.models.contracts import (
     ScenarioLog,
 )
 from app.tools.registry import ToolExecutionError, ToolRegistry
+from app.tools.scenarios import ScenarioStore, register_scenario_tools
+from tests.support import report_for_observation
 
 
 class QueueActionProvider:
@@ -121,6 +122,13 @@ async def test_scenario_tool_executes_through_harness_loop() -> None:
                     action_type=ActionType.FINAL_ANSWER,
                     intent="输出诊断结论",
                     reason="已收集核心指标",
+                    report=report_for_observation(
+                        tool_name="query_metrics",
+                        observation={
+                            "service": "payment-service",
+                            "metrics": {"error_rate": 0.12, "p95_latency_ms": 2_500.0},
+                        },
+                    ),
                 ),
             ]
         ),

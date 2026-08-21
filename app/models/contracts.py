@@ -396,18 +396,27 @@ class AgentAction(BaseModel):
     expected_observation: str | None = Field(default=None, max_length=1_000)
     reason: str = Field(min_length=1, max_length=2_000)
 
+    # 仅 final_answer 可以携带可追溯的最终诊断报告。
+    report: DiagnosisReport | None = None
+
     @model_validator(mode="after")
     def validate_tool_metadata(self) -> Self:
-        """确保工具元数据只出现在 call_tool 动作中。"""
+        """约束工具元数据和最终报告只出现在动作。"""
         if self.action_type is ActionType.CALL_TOOL:
             if not self.tool_name:
                 raise ValueError("tool_name is required for call_tool actions")
-            return self
+        else:
+            if self.tool_name is not None:
+                raise ValueError("tool_name is only allowed for call_tool actions")
+            if self.tool_args:
+                raise ValueError("tool_args are only allowed for call_tool actions")
 
-        if self.tool_name is not None:
-            raise ValueError("tool_name is only allowed for call_tool actions")
-        if self.tool_args:
-            raise ValueError("tool_args are only allowed for call_tool actions")
+        if self.action_type is ActionType.FINAL_ANSWER:
+            if self.report is None:
+                raise ValueError("report is required for final_answer actions")
+        elif self.report is not None:
+            raise ValueError("report is only allowed for final_answer actions")
+
         return self
 
 
@@ -469,6 +478,8 @@ class DiagnosisState(TypedDict):
     recommended_actions: list[dict[str, Any]]
     approval_request: dict[str, Any] | None
     ticket: dict[str, Any] | None
+    diagnosis_report: NotRequired[DiagnosisReport | None]
+    final_answer: NotRequired[str | None]
 
     # Context Manager 在每次动作提出前构建的最小模型上下文
     model_context: NotRequired[ContextSnapshot | None]

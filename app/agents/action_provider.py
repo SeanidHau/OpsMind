@@ -30,7 +30,13 @@ class LangChainActionProvider:
     _SYSTEM_INSTRUCTION = """\
     你是 OpsMind 的诊断规划模型。只能提出符合 AgentAction schema 的下一步动作。
     不要声称执行过工具；工具执行由 Harness 完成。
-    证据不足时，选择 call_tool 或 ask_user；只有证据足够时才选择 final_answer。
+    证据不足时，选择 call_tool 或 ask_user。
+
+    只有证据足够时才选择 final_answer。final_answer 必须携带 report。
+    report 的摘要、候选根因和建议必须基于当前 context；
+    report.evidence_ids 只能引用 context 中形如 evidence:<evidence_id> 的条目，
+    并且写入时应去掉 evidence: 前缀。
+    不要引用未出现在 context 中的证据 ID。
     """
 
     def __init__(self, chat_model: StructuredActionChatModel) -> None:

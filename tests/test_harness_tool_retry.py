@@ -16,6 +16,7 @@ from app.models.contracts import (
     ToolPolicy,
     ToolRiskLevel,
 )
+from tests.support import report_for_observation
 
 
 class QueueActionProvider:
@@ -66,6 +67,10 @@ def final_action() -> AgentAction:
         action_type=ActionType.FINAL_ANSWER,
         intent="输出诊断结论",
         reason="已经收集到足够证据",
+        report=report_for_observation(
+            tool_name="query_metrics",
+            observation={"status": "ok", "tool_name": "query_metrics"},
+        ),
     )
 
 

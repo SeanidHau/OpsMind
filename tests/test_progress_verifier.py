@@ -4,6 +4,7 @@ from typing import Any
 
 from app.harness.progress import ProgressVerifier
 from app.models.contracts import ActionType, AgentAction, ProgressStatus
+from tests.support import diagnosis_report
 
 
 def tool_action() -> AgentAction:
@@ -97,6 +98,7 @@ def test_final_answer_completes_progress() -> None:
         action_type=ActionType.FINAL_ANSWER,
         intent="输出诊断结果",
         reason="诊断完成",
+        report=diagnosis_report(),
     )
 
     assessment = ProgressVerifier().assess(

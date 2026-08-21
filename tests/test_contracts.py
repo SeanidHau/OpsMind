@@ -16,6 +16,7 @@ from app.models.contracts import (
     AgentAction,
     AgentEvent,
     BudgetState,
+    DiagnosisReport,
     DiagnosisState,
     EventType,
     PlanItem,
@@ -53,6 +54,31 @@ def test_non_tool_action_rejects_tool_metadata() -> None:
             tool_name="query_metrics",
             reason="最终回答不应调用工具",
         )
+
+
+def test_final_answer_requires_a_structured_report() -> None:
+    """最终回答必须提供至少一条证据引用的结构化报告。"""
+    with pytest.raises(ValidationError, match="report is required"):
+        AgentAction(
+            action_type=ActionType.FINAL_ANSWER,
+            intent="生成诊断结论",
+            reason="证据已满足门槛",
+        )
+
+    action = AgentAction(
+        action_type=ActionType.FINAL_ANSWER,
+        intent="生成诊断结论",
+        reason="证据已满足门槛",
+        report=DiagnosisReport(
+            summary="支付服务超时。",
+            probable_root_cause="数据库连接池耗尽。",
+            confidence=0.8,
+            evidence_ids=["a" * 64],
+            recommended_actions=["检查连接池。"],
+        ),
+    )
+
+    assert action.report is not None
 
 
 def test_budget_state_tracks_remaining_capacity() -> None:

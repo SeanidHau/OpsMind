@@ -13,6 +13,7 @@ from app.harness.context import ContextManager
 from app.harness.evidence import EvidenceCollector, EvidenceGate
 from app.harness.policy import ActionPolicy
 from app.harness.progress import ProgressVerifier
+from app.harness.report_renderer import MarkdownReportRenderer
 from app.models.contracts import (
     ActionType,
     AgentAction,
@@ -74,6 +75,8 @@ def create_initial_state(
         "hypotheses": [],
         "missing_information": [],
         "diagnosis": None,
+        "diagnosis_report": None,
+        "final_answer": None,
         "recommended_actions": [],
         "approval_request": None,
         "ticket": None,
@@ -99,6 +102,7 @@ class HarnessLoop:
         max_tool_retries: int = 2,
         evidence_collector: EvidenceCollector | None = None,
         evidence_gate: EvidenceGate | None = None,
+        report_renderer: MarkdownReportRenderer | None = None,
     ) -> None:
         if max_tool_retries < 0:
             raise ValueError("max_tool_retries must not be negative")
@@ -111,6 +115,7 @@ class HarnessLoop:
         self._max_tool_retries = max_tool_retries
         self._evidence_collector = evidence_collector or EvidenceCollector()
         self._evidence_gate = evidence_gate or EvidenceGate()
+        self._report_renderer = report_renderer or MarkdownReportRenderer()
         self._graph = self._build_graph()
 
     async def run(self, state: DiagnosisState) -> DiagnosisState:
@@ -473,6 +478,28 @@ class HarnessLoop:
                     "trajectory": [*state["trajectory"], verification_event],
                 }
 
+            report = action.report
+            if report is None:
+                # AgentAction 的契约已禁止这种情况；保留防御性检查以保护图状态。
+                raise RuntimeError("final_answer action requires a diagnosis report")
+
+            try:
+                rendered_report = self._report_renderer.render(report, state["evidence"])
+            except ValueError as error:
+                validation_error = str(error)
+                verification_event = self._new_event(
+                    state,
+                    event_type=EventType.VERIFICATION_FAILED,
+                    node="finish",
+                    action=action,
+                    decision=validation_error,
+                )
+                return {
+                    "terminal_status": HarnessStatus.BLOCKED,
+                    "errors": [*state["errors"], validation_error],
+                    "trajectory": [*state["trajectory"], verification_event],
+                }
+
             event = self._new_event(
                 state,
                 event_type=EventType.RUN_COMPLETED,
@@ -491,6 +518,9 @@ class HarnessLoop:
                 "progress_status": assessment.status,
                 "consecutive_stalls": assessment.consecutive_stalls,
                 "terminal_status": HarnessStatus.COMPLETED,
+                "diagnosis_report": report,
+                "diagnosis": report.model_dump(mode="json"),
+                "final_answer": rendered_report,
                 "trajectory": [*state["trajectory"], event],
             }
 

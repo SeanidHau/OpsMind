@@ -16,6 +16,7 @@ from app.models.contracts import (
     ToolRiskLevel,
 )
 from app.tools.registry import ToolExecutionError, ToolRegistry
+from tests.support import report_for_observation
 
 
 class QueueActionProvider:
@@ -130,6 +131,10 @@ async def test_registry_executes_through_harness_loop() -> None:
                     action_type=ActionType.FINAL_ANSWER,
                     intent="输出诊断结果",
                     reason="指标已收集",
+                    report=report_for_observation(
+                        tool_name="query_metrics",
+                        observation={"service": "payment", "error_rate": 0.12},
+                    ),
                 ),
             ]
         ),

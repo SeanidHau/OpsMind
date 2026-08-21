@@ -4,8 +4,8 @@ from collections import deque
 from typing import Any
 
 import pytest
-from app.harness.evidence import EvidenceCollector
 
+from app.harness.evidence import EvidenceCollector
 from app.harness.loop import HarnessLoop, create_initial_state
 from app.harness.policy import ActionPolicy
 from app.models.contracts import (
@@ -18,6 +18,7 @@ from app.models.contracts import (
     ToolPolicy,
     ToolRiskLevel,
 )
+from tests.support import report_for_observation
 
 
 class QueueActionProvider:
@@ -62,6 +63,13 @@ def final_action() -> AgentAction:
         action_type=ActionType.FINAL_ANSWER,
         intent="输出诊断结论",
         reason="指标证据已经收集完成",
+        report=report_for_observation(
+            tool_name="query_metrics",
+            observation={
+                "service": "payment-service",
+                "metrics": {"error_rate": 0.12, "p95_latency_ms": 2_500.0},
+            },
+        ),
     )
 
 
