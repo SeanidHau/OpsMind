@@ -131,7 +131,14 @@ class HarnessLoop:
 
         graph.add_edge(START, "build_context")
         graph.add_edge("build_context", "propose_action")
-        graph.add_edge("propose_action", "policy_check")
+        graph.add_conditional_edges(
+            "propose_action",
+            self._route_after_proposal,
+            {
+                "policy_check": "policy_check",
+                "finish": "finish",
+            },
+        )
         graph.add_conditional_edges(
             "policy_check",
             self._route_after_policy,
@@ -163,9 +170,35 @@ class HarnessLoop:
         return graph.compile()
 
     async def _propose_action(self, state: DiagnosisState) -> dict[str, Any]:
-        """调用动作提供器，并将候选动作写入状态和审计轨迹。"""
+        """在模型预算允许时调用动作提供器，并写入审计轨迹。"""
+        model_consumption = BudgetConsumption(model_calls=1)
+        exceeded = BudgetManager.exceeded_dimensions(state["budget"], model_consumption)
+
+        if exceeded:
+            block_reason = "调用模型会超出本次运行预算。"
+            blocked_event = self._new_event(
+                state,
+                event_type=EventType.ACTION_BLOCKED,
+                node="propose_action",
+                decision=block_reason,
+            )
+            return {
+                "terminal_status": HarnessStatus.BLOCKED,
+                "errors": [*state["errors"], block_reason],
+                "trajectory": [*state["trajectory"], blocked_event],
+            }
+
+        # 先消费预算，再调用模型，避免模型调用成功后才发现预算不足。
+        updated_budget = BudgetManager.consume(state["budget"], model_consumption)
         action = await self._action_provider.propose_action(state)
-        event = self._new_event(
+
+        model_event = self._new_event(
+            state,
+            event_type=EventType.MODEL_CALLED,
+            node="propose_action",
+            decision="模型已返回候选动作。",
+        )
+        action_event = self._new_event(
             state,
             event_type=EventType.ACTION_PROPOSED,
             node="propose_action",
@@ -174,8 +207,9 @@ class HarnessLoop:
         )
 
         return {
+            "budget": updated_budget,
             "current_action": action,
-            "trajectory": [*state["trajectory"], event],
+            "trajectory": [*state["trajectory"], model_event, action_event],
         }
 
     def _policy_check(self, state: DiagnosisState) -> dict[str, Any]:
@@ -456,6 +490,13 @@ class HarnessLoop:
             "errors": [*state["errors"], error_text],
             "trajectory": [*state["trajectory"], event],
         }
+
+    @staticmethod
+    def _route_after_proposal(state: DiagnosisState) -> str:
+        """模型预算阻断时直接结束，否则继续执行动作策略检查。"""
+        if state.get("terminal_status") is not None:
+            return "finish"
+        return "policy_check"
 
     def _route_after_policy(self, state: DiagnosisState) -> str:
         """将策略决策映射为工具节点或终止节点。"""

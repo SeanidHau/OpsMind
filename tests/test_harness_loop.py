@@ -46,12 +46,17 @@ class RecordingToolExecutor:
         return {"status": "ok", "tool_name": action.tool_name}
 
 
-def make_budget(*, max_steps: int = 5, max_tool_calls: int = 3) -> BudgetState:
-    """构造只关注步骤和工具调用次数的测试预算。"""
+def make_budget(
+    *,
+    max_steps: int = 5,
+    max_tool_calls: int = 3,
+    max_model_calls: int = 3,
+) -> BudgetState:
+    """构造可按需调整步骤、工具和模型调用次数的测试预算。"""
     return BudgetState(
         max_steps=max_steps,
         max_tool_calls=max_tool_calls,
-        max_model_calls=3,
+        max_model_calls=max_model_calls,
         max_tokens=1_000,
         max_runtime_seconds=60,
         max_estimated_cost_usd=1.0,
@@ -203,7 +208,7 @@ async def test_loop_stops_after_three_repeated_observations() -> None:
         policy=ActionPolicy([ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)]),
     )
 
-    result = await loop.run(make_state(budget=make_budget(max_tool_calls=5)))
+    result = await loop.run(make_state(budget=make_budget(max_tool_calls=5, max_model_calls=5)))
 
     assert result["terminal_status"] is HarnessStatus.STALLED
     assert result["progress_status"] is ProgressStatus.STALLED
