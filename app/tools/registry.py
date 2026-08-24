@@ -57,7 +57,7 @@ class ToolRegistry:
 
         registered_tool = self._tools.get(tool_name)
         if registered_tool is None:
-            raise ToolExecutionError(f"tool is not regitered: {tool_name}")
+            raise ToolExecutionError(f"tool is not registered: {tool_name}")
 
         definition, handler = registered_tool
         self._validate_args(definition, action.tool_args)

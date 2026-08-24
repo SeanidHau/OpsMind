@@ -26,6 +26,10 @@ from app.harness.replay import CachedReplayService
 from app.harness.report_renderer import MarkdownReportRenderer
 from app.harness.restore import RunStateRestorer
 from app.harness.snapshot import InMemoryRunArchive, RunArchive, RunSnapshotFactory
+from app.harness.tool_failure import (
+    DefaultToolFailureClassifier,
+    ToolFailureClassifier,
+)
 from app.models.contracts import (
     ActionType,
     AgentAction,
@@ -124,6 +128,7 @@ class HarnessLoop:
         max_model_retries: int = 2,
         model_retry_delay_seconds: float = 0.25,
         model_failure_classifier: ModelFailureClassifier | None = None,
+        tool_failure_classifier: ToolFailureClassifier | None = None,
         evidence_collector: EvidenceCollector | None = None,
         evidence_gate: EvidenceGate | None = None,
         report_renderer: MarkdownReportRenderer | None = None,
@@ -152,6 +157,7 @@ class HarnessLoop:
         self._max_replan_corrections = max_replan_corrections
         self._model_retry_delay_seconds = model_retry_delay_seconds
         self._model_failure_classifier = model_failure_classifier or DefaultModelFailureClassifier()
+        self._tool_failure_classifier = tool_failure_classifier or DefaultToolFailureClassifier()
         self._evidence_collector = evidence_collector or EvidenceCollector()
         self._evidence_gate = evidence_gate or EvidenceGate()
         self._report_renderer = report_renderer or MarkdownReportRenderer()
@@ -673,14 +679,40 @@ class HarnessLoop:
         try:
             result = await self._tool_executor.execute(action)
         except Exception as error:
-            error_text = str(error)[:4_000]
+            failure = self._tool_failure_classifier.classify(error)
             retry_count = state["retry_count"] + 1
             attempted_tool_calls = state["tool_call_count"] + 1
+            failure_observation = {
+                "category": failure.category,
+                "retryable": failure.retryable,
+            }
+
+            # 不可恢复错误不应重复调用工具。
+            if not failure.retryable:
+                failed_event = self._new_event(
+                    state,
+                    event_type=EventType.RUN_FAILED,
+                    node="execute_tool",
+                    action=action,
+                    observation=failure_observation,
+                    decision="工具调用失败，错误分类策略禁止自动重试。",
+                    error=failure.message,
+                )
+                return {
+                    "terminal_status": HarnessStatus.FAILED,
+                    "retry_count": retry_count,
+                    "tool_call_count": attempted_tool_calls,
+                    "errors": [*state["errors"], failure.message],
+                    "trajectory": [*state["trajectory"], started_event, failed_event],
+                }
 
             if retry_count <= self._max_tool_retries:
-                # 重试不再调用模型或策略，但每一次真实工具尝试必须消耗工具预算。
+                # 重试不重新调用模型或策略，但每次真实工具尝试都消费预算。
                 retry_consumption = BudgetConsumption(tool_calls=1)
-                exceeded = BudgetManager.exceeded_dimensions(state["budget"], retry_consumption)
+                exceeded = BudgetManager.exceeded_dimensions(
+                    state["budget"],
+                    retry_consumption,
+                )
 
                 if not exceeded:
                     retry_event = self._new_event(
@@ -688,11 +720,15 @@ class HarnessLoop:
                         event_type=EventType.TOOL_RETRY,
                         node="execute_tool",
                         action=action,
+                        observation=failure_observation,
                         decision=f"工具调用失败，准备第 {retry_count} 次重试。",
-                        error=error_text,
+                        error=failure.message,
                     )
                     return {
-                        "budget": BudgetManager.consume(state["budget"], retry_consumption),
+                        "budget": BudgetManager.consume(
+                            state["budget"],
+                            retry_consumption,
+                        ),
                         "retry_count": retry_count,
                         "tool_call_count": attempted_tool_calls,
                         "trajectory": [*state["trajectory"], started_event, retry_event],
@@ -704,8 +740,9 @@ class HarnessLoop:
                     event_type=EventType.ACTION_BLOCKED,
                     node="execute_tool",
                     action=action,
+                    observation=failure_observation,
                     decision=block_reason,
-                    error=error_text,
+                    error=failure.message,
                 )
                 return {
                     "terminal_status": HarnessStatus.BLOCKED,
@@ -720,13 +757,15 @@ class HarnessLoop:
                 event_type=EventType.RUN_FAILED,
                 node="execute_tool",
                 action=action,
-                error=error_text,
+                observation=failure_observation,
+                decision="可重试工具错误在重试次数耗尽后仍然失败。",
+                error=failure.message,
             )
             return {
                 "terminal_status": HarnessStatus.FAILED,
                 "retry_count": retry_count,
                 "tool_call_count": attempted_tool_calls,
-                "errors": [*state["errors"], error_text],
+                "errors": [*state["errors"], failure.message],
                 "trajectory": [*state["trajectory"], started_event, failed_event],
             }
 
@@ -734,6 +773,7 @@ class HarnessLoop:
         if tool_name is None:
             raise RuntimeError("call_tool action requires tool_name")
 
+        # 成功结果会转为可引用证据，供最终报告进行证据校验。
         evidence = self._evidence_collector.collect(
             tool_name=tool_name,
             observation=result,

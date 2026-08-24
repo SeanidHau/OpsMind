@@ -46,7 +46,7 @@ class FlakyToolExecutor:
         """先抛出预设错误，之后返回成功观察结果。"""
         self.attempts += 1
         if self.attempts <= self._failures_before_success:
-            raise RuntimeError(f"temporary failure {self.attempts}")
+            raise ConnectionError(f"temporary failure {self.attempts}")
         return {"status": "ok", "tool_name": action.tool_name}
 
 
