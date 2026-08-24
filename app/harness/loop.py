@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from app.harness.approval import ApprovalResolver
 from app.harness.budget import BudgetManager
 from app.harness.context import ContextManager
 from app.harness.evidence import EvidenceCollector, EvidenceGate
@@ -21,6 +22,7 @@ from app.models.contracts import (
     ActionType,
     AgentAction,
     AgentEvent,
+    ApprovalCommand,
     BudgetConsumption,
     BudgetState,
     DiagnosisState,
@@ -83,6 +85,7 @@ def create_initial_state(
         "final_answer": None,
         "recommended_actions": [],
         "approval_request": None,
+        "approval_resolution": None,
         "ticket": None,
         "retry_count": 0,
         "question_count": 0,
@@ -125,6 +128,7 @@ class HarnessLoop:
         self._cached_replay = CachedReplayService(self._run_archive)
         self._snapshot_factory = RunSnapshotFactory()
         self._state_restorer = RunStateRestorer()
+        self._approval_resolver = ApprovalResolver()
         self._graph = self._build_graph()
 
     async def run(self, state: DiagnosisState) -> DiagnosisState:
@@ -159,6 +163,17 @@ class HarnessLoop:
         """恢复指定快照的强类型状态，不执行模型、工具或图节点。"""
         snapshot = self._run_archive.load(run_id)
         return self._state_restorer.restore(snapshot)
+
+    def resolve_approval(
+        self,
+        *,
+        run_id: UUID,
+        command: ApprovalCommand,
+    ) -> DiagnosisState:
+        """恢复待审批 checkpoint 并返回已记录审批决议的状态。"""
+        state = self.restore_checkpoint(run_id)
+        updates = self._approval_resolver.resolve(state=state, command=command)
+        return cast(DiagnosisState, {**state, **updates})
 
     def _build_graph(
         self,

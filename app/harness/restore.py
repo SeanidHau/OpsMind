@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from app.models.contracts import (
     AgentAction,
+    ApprovalResolution,
     BudgetState,
     ContextSnapshot,
     DiagnosisReport,
@@ -52,6 +53,10 @@ class RunStateRestorer:
             if state.get("diagnosis_report") is not None:
                 state["diagnosis_report"] = DiagnosisReport.model_validate(
                     state["diagnosis_report"]
+                )
+            if state.get("approval_resolution") is not None:
+                state["approval_resolution"] = ApprovalResolution.model_validate(
+                    state["approval_resolution"]
                 )
 
             progress_status = state.get("progress_status")

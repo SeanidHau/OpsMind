@@ -96,6 +96,13 @@ class HarnessStatus(StrEnum):
     FAILED = "failed"
 
 
+class ApprovalDecision(StrEnum):
+    """人工审批对待执行动作作出的决定。"""
+
+    APPROVE = "approve"
+    REJECT = "reject"
+
+
 class ReplayMode(StrEnum):
     """运行回放的数据来源。"""
 
@@ -477,6 +484,26 @@ class ReplayResult(BaseModel):
     replayed_at: datetime = Field(default_factory=utc_now)
 
 
+class ApprovalCommand(BaseModel):
+    """审批人员提交的决定及其审计理由。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: ApprovalDecision
+    reason: str = Field(min_length=1, max_length=2_000)
+
+
+class ApprovalResolution(BaseModel):
+    """一次已记录但尚未执行的审批决议。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: ApprovalDecision
+    reason: str = Field(min_length=1, max_length=2_000)
+    action: AgentAction
+    resolved_at: datetime = Field(default_factory=utc_now)
+
+
 class EvaluationCheck(BaseModel):
     """一条可解释的轨迹质量检查结果。"""
 
@@ -561,6 +588,7 @@ class DiagnosisState(TypedDict):
     progress_fingerprints: NotRequired[list[str]]
     consecutive_stalls: NotRequired[int]
     replan_requested: NotRequired[bool]
+    approval_resolution: NotRequired[ApprovalResolution | None]
 
     # 诊断领域状态
     retrieved_documents: list[dict[str, Any]]
@@ -592,6 +620,9 @@ __all__ = [
     "ActionType",
     "AgentAction",
     "AgentEvent",
+    "ApprovalCommand",
+    "ApprovalDecision",
+    "ApprovalResolution",
     "BenchmarkCaseResult",
     "BenchmarkResult",
     "BudgetConsumption",
