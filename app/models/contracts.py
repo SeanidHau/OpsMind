@@ -499,6 +499,41 @@ class TrajectoryEvaluation(BaseModel):
     evaluated_at: datetime = Field(default_factory=utc_now)
 
 
+class EvaluationCase(BaseModel):
+    """一个可重复执行的离线评测样本及其确定性期望。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    case_id: str = Field(min_length=1, max_length=100)
+    user_query: str = Field(min_length=1, max_length=4_000)
+    expected_terminal_status: HarnessStatus
+    expected_root_cause_contains: str | None = Field(default=None, max_length=500)
+    expected_evidence_tools: tuple[str, ...] = ()
+
+
+class BenchmarkCaseResult(BaseModel):
+    """单个评测样本的轨迹和业务期望检查结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    case_id: str = Field(min_length=1, max_length=100)
+    passed: bool
+    score: float = Field(ge=0, le=1)
+    checks: list[EvaluationCheck] = Field(min_length=1)
+    trajectory_evaluation: TrajectoryEvaluation
+
+
+class BenchmarkResult(BaseModel):
+    """一批离线评测样本的汇总结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    passed: bool
+    score: float = Field(ge=0, le=1)
+    case_results: list[BenchmarkCaseResult] = Field(min_length=1)
+    evaluated_at: datetime = Field(default_factory=utc_now)
+
+
 class DiagnosisState(TypedDict):
     """LangGraph 节点间传递的完整诊断状态。"""
 
@@ -557,6 +592,8 @@ __all__ = [
     "ActionType",
     "AgentAction",
     "AgentEvent",
+    "BenchmarkCaseResult",
+    "BenchmarkResult",
     "BudgetConsumption",
     "BudgetState",
     "ContextSnapshot",
@@ -564,6 +601,7 @@ __all__ = [
     "ContextSource",
     "DiagnosisState",
     "DiagnosisState",
+    "EvaluationCase",
     "EvaluationCheck",
     "EventType",
     "EvidenceItem",
