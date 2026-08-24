@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import math
+import time
 from typing import Any, Protocol, cast
 from uuid import UUID, uuid4
 
@@ -145,11 +148,11 @@ class HarnessLoop:
         self._graph = self._build_graph()
 
     async def run(self, state: DiagnosisState) -> DiagnosisState:
-        """运行新任务图，并保存首次 checkpoint。"""
+        """运行新任务图，累计墙钟时间预算并保存首次 checkpoint。"""
         return await self._run_and_archive(state, replace_checkpoint=False)
 
     async def resume_approved(self, run_id: UUID) -> DiagnosisState:
-        """从已批准 checkpoint 续跑，并替换该运行的最新快照。"""
+        """从已批准 checkpoint 续跑，累计剩余墙钟时间并替换最新快照。"""
         state = self.restore_checkpoint(run_id)
         resolution = state.get("approval_resolution")
 
@@ -169,9 +172,53 @@ class HarnessLoop:
         *,
         replace_checkpoint: bool,
     ) -> DiagnosisState:
-        """执行图，并以新增或替换方式归档结束状态。"""
-        result = cast(DiagnosisState, await self._graph.ainvoke(state))
-        return self._archive_state(result, replace_checkpoint=replace_checkpoint)
+        """在剩余墙钟时间内运行图，并归档最后一个可恢复状态。"""
+        started_at = time.monotonic()
+        latest_state = state
+        remaining_seconds = state["budget"].remaining_runtime_seconds
+
+        try:
+            # astream 保留每个已完成节点的状态；超时后仍能安全归档最新状态。
+            async with asyncio.timeout(remaining_seconds):
+                async for graph_state in self._graph.astream(state, stream_mode="values"):
+                    latest_state = cast(DiagnosisState, graph_state)
+        except TimeoutError:
+            timeout_reason = "本次运行超过时间预算。"
+            timeout_event = self._new_event(
+                latest_state,
+                event_type=EventType.ACTION_BLOCKED,
+                node="runtime_budget",
+                decision=timeout_reason,
+            )
+            latest_state = cast(
+                DiagnosisState,
+                {
+                    **latest_state,
+                    "terminal_status": HarnessStatus.BLOCKED,
+                    "errors": [*latest_state["errors"], timeout_reason],
+                    "trajectory": [*latest_state["trajectory"], timeout_event],
+                },
+            )
+
+        elapsed_seconds = math.ceil(max(0.0, time.monotonic() - started_at))
+        consumed_seconds = min(
+            elapsed_seconds,
+            latest_state["budget"].remaining_runtime_seconds,
+        )
+        if consumed_seconds > 0:
+            latest_state = cast(
+                DiagnosisState,
+                {
+                    **latest_state,
+                    # 每次 run/resume 都累计实际墙钟时间，续跑不会重置时间预算。
+                    "budget": BudgetManager.consume(
+                        latest_state["budget"],
+                        BudgetConsumption(runtime_seconds=consumed_seconds),
+                    ),
+                },
+            )
+
+        return self._archive_state(latest_state, replace_checkpoint=replace_checkpoint)
 
     def _archive_state(
         self,
