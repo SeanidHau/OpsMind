@@ -74,6 +74,10 @@ def create_initial_state(
         "plan": [],
         "plan_version": 0,
         "plan_history": [],
+        "replan_requested": False,
+        "replan_reason": None,
+        "replan_feedback": None,
+        "replan_correction_count": 0,
         "context_refs": [],
         "budget": budget,
         "trajectory": [],
@@ -114,9 +118,13 @@ class HarnessLoop:
         evidence_gate: EvidenceGate | None = None,
         report_renderer: MarkdownReportRenderer | None = None,
         run_archive: RunArchive | None = None,
+        max_replan_corrections: int = 1,
     ) -> None:
         if max_tool_retries < 0:
             raise ValueError("max_tool_retries must not be negative")
+
+        if max_replan_corrections < 0:
+            raise ValueError("max_replan_corrections must not be negative")
 
         self._action_provider = action_provider
         self._tool_executor = tool_executor
@@ -125,6 +133,7 @@ class HarnessLoop:
         self._plan_manager = PlanManager()
         self._context_manager = context_manager or ContextManager()
         self._max_tool_retries = max_tool_retries
+        self._max_replan_corrections = max_replan_corrections
         self._evidence_collector = evidence_collector or EvidenceCollector()
         self._evidence_gate = evidence_gate or EvidenceGate()
         self._report_renderer = report_renderer or MarkdownReportRenderer()
@@ -224,6 +233,7 @@ class HarnessLoop:
 
         graph.add_node("propose_action", self._propose_action)
         graph.add_node("apply_plan", self._apply_plan)
+        graph.add_node("replan_correction", self._reject_replan_violation)
         graph.add_node("policy_check", self._policy_check)
         graph.add_node("execute_tool", self._execute_tool)
         graph.add_node("verify_progress", self._verify_progress)
@@ -245,6 +255,17 @@ class HarnessLoop:
             self._route_after_proposal,
             {
                 "policy_check": "policy_check",
+                "replan_correction": "replan_correction",
+                "finish": "finish",
+            },
+        )
+        graph.add_conditional_edges(
+            "replan_correction",
+            self._route_after_replan_correction,
+            {
+                # 首次违规后重建上下文，让模型按协议重新输出。
+                "build_context": "build_context",
+                # 超过纠正次数上限时，安全结束运行。
                 "finish": "finish",
             },
         )
@@ -419,6 +440,39 @@ class HarnessLoop:
             "plan_version": revision.version,
             "plan_history": [*state["plan_history"], revision],
             "replan_requested": False,
+            "replan_reason": None,
+            "replan_feedback": None,
+            "replan_correction_count": 0,
+            "trajectory": [*state["trajectory"], event],
+        }
+
+    def _reject_replan_violation(self, state: DiagnosisState) -> dict[str, Any]:
+        """拒绝 Replan 期间的非计划动作，并限制模型纠正次数。"""
+        action = self._require_current_action(state)
+        correction_count = state.get("replan_correction_count", 0) + 1
+        reason = "连续停滞后必须先提交 update_plan，不能直接执行其他动作。"
+        event = self._new_event(
+            state,
+            event_type=EventType.ACTION_BLOCKED,
+            node="replan_correction",
+            action=action,
+            decision=reason,
+        )
+
+        if correction_count > self._max_replan_corrections:
+            terminal_reason = "模型未能在规定次数内提交重新规划。"
+            return {
+                "replan_correction_count": correction_count,
+                "replan_feedback": reason,
+                "terminal_status": HarnessStatus.BLOCKED,
+                "errors": [*state["errors"], terminal_reason],
+                "trajectory": [*state["trajectory"], event],
+            }
+
+        return {
+            # 记录拒绝原因，使下一次模型调用能生成有针对性的 update_plan。
+            "replan_correction_count": correction_count,
+            "replan_feedback": reason,
             "trajectory": [*state["trajectory"], event],
         }
 
@@ -622,7 +676,14 @@ class HarnessLoop:
 
         # 第二次连续停滞只发出重规划信号，保留后续动作机会
         if assessment.should_replan:
-            updates["replan_requested"] = True
+            updates.update(
+                {
+                    "replan_requested": True,
+                    "replan_reason": assessment.reason,
+                    "replan_feedback": None,
+                    "replan_correction_count": 0,
+                }
+            )
 
         # 第三次连续停滞才真正结束 LangGraph
         if assessment.should_stop:
@@ -760,10 +821,22 @@ class HarnessLoop:
 
     @staticmethod
     def _route_after_proposal(state: DiagnosisState) -> str:
-        """模型预算阻断时直接结束，否则继续执行动作策略检查。"""
+        """模型预算阻断时结束；Replan 期间只接受 update_plan。"""
         if state.get("terminal_status") is not None:
             return "finish"
+
+        action = HarnessLoop._require_current_action(state)
+        if (
+            state.get("replan_requested", False)
+            and action.action_type is not ActionType.UPDATE_PLAN
+        ):
+            return "replan_correction"
         return "policy_check"
+
+    @staticmethod
+    def _route_after_replan_correction(state: DiagnosisState) -> str:
+        """首次协议违规后允许模型纠正；超限时结束。"""
+        return "finish" if state.get("terminal_status") is not None else "build_context"
 
     @staticmethod
     def _route_after_plan_application(state: DiagnosisState) -> str:

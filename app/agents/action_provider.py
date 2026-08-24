@@ -35,6 +35,8 @@ class LangChainActionProvider:
     当 plan_version 为 0 时，先选择 update_plan，并提交 2 到 5 个可执行计划项。
     当 replan_requested 为 true 时，必须先选择 update_plan，说明新证据或停滞原因，
     再选择新的工具路径。只有 update_plan 可以携带 plan 字段。
+    replan_feedback 不为空时，上一条动作已被 Harness 拒绝。
+    此时只能提交 update_plan；不要重复被拒绝的工具或最终回答动作。
 
     只有证据足够时才选择 final_answer。final_answer 必须携带 report。
     report 的摘要、候选根因和建议必须基于当前 context；
@@ -60,6 +62,9 @@ class LangChainActionProvider:
             "truncated": model_context.truncated,
             "plan_version": state["plan_version"],
             "replan_requested": state.get("replan_requested", False),
+            "replan_reason": state.get("replan_reason"),
+            "replan_feedback": state.get("replan_feedback"),
+            "replan_correction_count": state.get("replan_correction_count", 0),
         }
         messages: list[BaseMessage] = [
             SystemMessage(content=self._SYSTEM_INSTRUCTION),

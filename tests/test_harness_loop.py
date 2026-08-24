@@ -7,6 +7,7 @@ import pytest
 
 from app.harness.loop import HarnessLoop, create_initial_state
 from app.harness.policy import ActionPolicy
+from app.harness.progress import ProgressVerifier
 from app.models.contracts import (
     ActionType,
     AgentAction,
@@ -215,6 +216,8 @@ async def test_loop_stops_after_three_repeated_observations() -> None:
         action_provider=QueueActionProvider([tool_action("query_metrics")] * 4),
         tool_executor=executor,
         policy=ActionPolicy([ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)]),
+        # 本用例验证第三次停滞的强制停止，不触发第 30 阶段的两次停滞 Replan 协议。
+        progress_verifier=ProgressVerifier(replan_after_stalls=3, stop_after_stalls=3),
     )
 
     result = await loop.run(make_state(budget=make_budget(max_tool_calls=5, max_model_calls=5)))

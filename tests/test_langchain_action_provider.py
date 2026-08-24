@@ -108,11 +108,15 @@ async def test_provider_binds_agent_action_schema_and_uses_model_context() -> No
     assert payload["context"][1]["reference"] == "evidence:abc"
     assert payload["plan_version"] == 0
     assert payload["replan_requested"] is False
+    assert payload["replan_reason"] is None
+    assert payload["replan_feedback"] is None
+    assert payload["replan_correction_count"] == 0
     assert "budget" not in payload
     assert "trajectory" not in payload
     assert "final_answer 必须携带 report" in str(messages[0].content)
     assert "evidence:<evidence_id>" in str(messages[0].content)
     assert "update_plan" in str(messages[0].content)
+    assert "replan_feedback" in str(messages[0].content)
 
 
 @pytest.mark.asyncio

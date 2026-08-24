@@ -608,6 +608,9 @@ class DiagnosisState(TypedDict):
     progress_fingerprints: NotRequired[list[str]]
     consecutive_stalls: NotRequired[int]
     replan_requested: NotRequired[bool]
+    replan_reason: NotRequired[str | None]
+    replan_feedback: NotRequired[str | None]
+    replan_correction_count: NotRequired[int]
     approval_resolution: NotRequired[ApprovalResolution | None]
 
     # 诊断领域状态
