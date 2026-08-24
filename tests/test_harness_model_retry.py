@@ -102,7 +102,7 @@ def make_loop(
 @pytest.mark.asyncio
 async def test_loop_retries_transient_model_failure_and_completes() -> None:
     """瞬时模型错误后应重试，并继续执行返回的合法动作。"""
-    provider = OutcomeActionProvider([RuntimeError("temporary model error"), final_action()])
+    provider = OutcomeActionProvider([ConnectionError("temporary model error"), final_action()])
 
     result = await make_loop(provider).run(make_state())  # type: ignore[arg-type]
 
@@ -120,7 +120,7 @@ async def test_loop_retries_transient_model_failure_and_completes() -> None:
 async def test_loop_fails_and_archives_when_model_retries_are_exhausted() -> None:
     """模型连续失败超过重试次数后必须归档为 FAILED。"""
     provider = OutcomeActionProvider(
-        [RuntimeError("first failure"), RuntimeError("second failure")]
+        [ConnectionError("first failure"), ConnectionError("second failure")]
     )
 
     result = await make_loop(provider).run(make_state())  # type: ignore[arg-type]
@@ -136,7 +136,7 @@ async def test_loop_fails_and_archives_when_model_retries_are_exhausted() -> Non
 @pytest.mark.asyncio
 async def test_loop_blocks_model_retry_that_exceeds_model_budget() -> None:
     """模型重试前必须检查模型调用预算，不能绕过预算上限。"""
-    provider = OutcomeActionProvider([RuntimeError("temporary model error")])
+    provider = OutcomeActionProvider([ConnectionError("temporary model error")])
 
     result = await make_loop(provider).run(
         make_state(max_model_calls=1)  # type: ignore[arg-type]

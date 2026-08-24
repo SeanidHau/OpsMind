@@ -15,6 +15,10 @@ from app.harness.approval import ApprovalResolver
 from app.harness.budget import BudgetManager
 from app.harness.context import ContextManager
 from app.harness.evidence import EvidenceCollector, EvidenceGate
+from app.harness.model_failure import (
+    DefaultModelFailureClassifier,
+    ModelFailureClassifier,
+)
 from app.harness.plan import PlanManager
 from app.harness.policy import ActionPolicy
 from app.harness.progress import ProgressVerifier
@@ -119,6 +123,7 @@ class HarnessLoop:
         max_tool_retries: int = 2,
         max_model_retries: int = 2,
         model_retry_delay_seconds: float = 0.25,
+        model_failure_classifier: ModelFailureClassifier | None = None,
         evidence_collector: EvidenceCollector | None = None,
         evidence_gate: EvidenceGate | None = None,
         report_renderer: MarkdownReportRenderer | None = None,
@@ -146,6 +151,7 @@ class HarnessLoop:
         self._max_model_retries = max_model_retries
         self._max_replan_corrections = max_replan_corrections
         self._model_retry_delay_seconds = model_retry_delay_seconds
+        self._model_failure_classifier = model_failure_classifier or DefaultModelFailureClassifier()
         self._evidence_collector = evidence_collector or EvidenceCollector()
         self._evidence_gate = evidence_gate or EvidenceGate()
         self._report_renderer = report_renderer or MarkdownReportRenderer()
@@ -452,16 +458,39 @@ class HarnessLoop:
             try:
                 action = await self._action_provider.propose_action(state)
             except Exception as error:
-                error_text = str(error)[:4_000]
-                failure_reasons.append(error_text)
+                failure = self._model_failure_classifier.classify(error)
+                failure_reasons.append(failure.message)
+
+                # 错误分类会写入轨迹，便于 replay 和离线评测定位失败来源。
+                failure_observation = {
+                    "category": failure.category,
+                    "retryable": failure.retryable,
+                }
+
+                if not failure.retryable:
+                    failed_event = self._new_event(
+                        state,
+                        event_type=EventType.RUN_FAILED,
+                        node="propose_action",
+                        observation=failure_observation,
+                        error=failure.message,
+                        decision="模型调用失败，错误分类策略禁止自动重试。",
+                    )
+                    return {
+                        "budget": updated_budget,
+                        "terminal_status": HarnessStatus.FAILED,
+                        "errors": [*state["errors"], *failure_reasons],
+                        "trajectory": [*trajectory, model_event, failed_event],
+                    }
 
                 if attempt >= self._max_model_retries:
                     failed_event = self._new_event(
                         state,
                         event_type=EventType.RUN_FAILED,
                         node="propose_action",
-                        error=error_text,
-                        decision="模型调用在重试次数耗尽后仍然失败。",
+                        observation=failure_observation,
+                        error=failure.message,
+                        decision="可重试模型错误在重试次数耗尽后仍然失败。",
                     )
                     return {
                         "budget": updated_budget,
@@ -474,12 +503,13 @@ class HarnessLoop:
                     state,
                     event_type=EventType.MODEL_RETRY,
                     node="propose_action",
+                    observation=failure_observation,
                     decision=f"模型调用失败，准备第 {attempt + 1} 次重试。",
-                    error=error_text,
+                    error=failure.message,
                 )
                 trajectory.extend((model_event, retry_event))
 
-                # 指数退避仍受第 32 阶段的总运行时限约束。
+                # 仅临时传输故障会在总运行时限内进行指数退避。
                 delay_seconds = self._model_retry_delay_seconds * (2**attempt)
                 await asyncio.sleep(delay_seconds)
                 continue
