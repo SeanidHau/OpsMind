@@ -20,6 +20,7 @@ from app.models.contracts import (
     DiagnosisState,
     EventType,
     PlanItem,
+    PlanRevision,
     PlanStatus,
 )
 
@@ -81,6 +82,32 @@ def test_final_answer_requires_a_structured_report() -> None:
     assert action.report is not None
 
 
+def test_update_plan_requires_plan_and_other_actions_reject_it() -> None:
+    """计划载荷只能由 update_plan 提交，避免动作语义混杂。"""
+    item = PlanItem(title="查询指标", rationale="收集延迟证据")
+    action = AgentAction(
+        action_type=ActionType.UPDATE_PLAN,
+        intent="建立诊断计划",
+        reason="开始排查前先明确步骤。",
+        plan=[item],
+    )
+
+    assert action.plan == [item]
+    with pytest.raises(ValidationError, match="plan is required"):
+        AgentAction(
+            action_type=ActionType.UPDATE_PLAN,
+            intent="建立诊断计划",
+            reason="缺少计划载荷。",
+        )
+    with pytest.raises(ValidationError, match="plan is only allowed"):
+        AgentAction(
+            action_type=ActionType.ASK_USER,
+            intent="补充故障时间",
+            reason="需要缩小时间窗口。",
+            plan=[item],
+        )
+
+
 def test_budget_state_tracks_remaining_capacity() -> None:
     """预算状态必须拒绝已使用量超过上限的无效配置。"""
     budget = BudgetState(
@@ -138,5 +165,10 @@ def test_plan_and_graph_state_expose_required_fields() -> None:
     state_fields = get_type_hints(DiagnosisState)
 
     assert plan_item.status == PlanStatus.PENDING
-    assert {"plan", "budget", "trajectory", "progress_status"}.issubset(state_fields)
+    revision = PlanRevision(version=1, reason="建立初始计划。", items=[plan_item])
+
+    assert revision.items == [plan_item]
+    assert {"plan", "plan_history", "budget", "trajectory", "progress_status"}.issubset(
+        state_fields
+    )
     assert datetime.now(UTC).tzinfo == UTC

@@ -50,6 +50,7 @@ class EventType(StrEnum):
     RUN_COMPLETED = "run_completed"
     RUN_FAILED = "run_failed"
     EVIDENCE_COLLECTED = "evidence_collected"
+    PLAN_REVISED = "plan_revised"
 
 
 class PlanStatus(StrEnum):
@@ -316,6 +317,17 @@ class PlanItem(BaseModel):
     notes: str | None = None
 
 
+class PlanRevision(BaseModel):
+    """一次通过 Harness 校验的完整计划版本。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=2_000)
+    items: list[PlanItem] = Field(min_length=1, max_length=10)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class DiagnosisReport(BaseModel):
     """包含可追溯证据引用的结构化诊断报告。"""
 
@@ -408,6 +420,7 @@ class AgentAction(BaseModel):
     tool_args: dict[str, Any] = Field(default_factory=dict)
     expected_observation: str | None = Field(default=None, max_length=1_000)
     reason: str = Field(min_length=1, max_length=2_000)
+    plan: list[PlanItem] = Field(default_factory=list, max_length=10)
 
     # 仅 final_answer 可以携带可追溯的最终诊断报告。
     report: DiagnosisReport | None = None
@@ -429,6 +442,12 @@ class AgentAction(BaseModel):
                 raise ValueError("report is required for final_answer actions")
         elif self.report is not None:
             raise ValueError("report is only allowed for final_answer actions")
+
+        if self.action_type is ActionType.UPDATE_PLAN:
+            if not self.plan:
+                raise ValueError("plan is required for update_plan actions")
+        elif self.plan:
+            raise ValueError("plan is only allowed for update_plan actions")
 
         return self
 
@@ -577,6 +596,7 @@ class DiagnosisState(TypedDict):
     # Harness 核心状态。
     plan: list[PlanItem]
     plan_version: int
+    plan_history: list[PlanRevision]
     context_refs: list[str]
     budget: BudgetState
     trajectory: list[AgentEvent]
@@ -642,6 +662,7 @@ __all__ = [
     "KnowledgeChunk",
     "KnowledgeDocument",
     "PlanItem",
+    "PlanRevision",
     "PlanStatus",
     "PolicyDecision",
     "PolicyOutcome",

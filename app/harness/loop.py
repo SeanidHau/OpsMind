@@ -12,6 +12,7 @@ from app.harness.approval import ApprovalResolver
 from app.harness.budget import BudgetManager
 from app.harness.context import ContextManager
 from app.harness.evidence import EvidenceCollector, EvidenceGate
+from app.harness.plan import PlanManager
 from app.harness.policy import ActionPolicy
 from app.harness.progress import ProgressVerifier
 from app.harness.replay import CachedReplayService
@@ -72,6 +73,7 @@ def create_initial_state(
         "severity": None,
         "plan": [],
         "plan_version": 0,
+        "plan_history": [],
         "context_refs": [],
         "budget": budget,
         "trajectory": [],
@@ -120,6 +122,7 @@ class HarnessLoop:
         self._tool_executor = tool_executor
         self._policy = policy
         self._progress_verifier = progress_verifier or ProgressVerifier()
+        self._plan_manager = PlanManager()
         self._context_manager = context_manager or ContextManager()
         self._max_tool_retries = max_tool_retries
         self._evidence_collector = evidence_collector or EvidenceCollector()
@@ -220,6 +223,7 @@ class HarnessLoop:
         graph = StateGraph(DiagnosisState)
 
         graph.add_node("propose_action", self._propose_action)
+        graph.add_node("apply_plan", self._apply_plan)
         graph.add_node("policy_check", self._policy_check)
         graph.add_node("execute_tool", self._execute_tool)
         graph.add_node("verify_progress", self._verify_progress)
@@ -248,7 +252,18 @@ class HarnessLoop:
             "policy_check",
             self._route_after_policy,
             {
+                "apply_plan": "apply_plan",
                 "execute_tool": "execute_tool",
+                "finish": "finish",
+            },
+        )
+        graph.add_conditional_edges(
+            "apply_plan",
+            self._route_after_plan_application,
+            {
+                # 合法计划才重新构建上下文并继续诊断。
+                "build_context": "build_context",
+                # 无效计划已被 Harness 阻断，直接结束图。
                 "finish": "finish",
             },
         )
@@ -356,6 +371,55 @@ class HarnessLoop:
             "budget": updated_budget,
             "current_action": action,
             "trajectory": [*state["trajectory"], model_event, action_event],
+        }
+
+    def _apply_plan(self, state: DiagnosisState) -> dict[str, Any]:
+        """校验模型提交的完整计划，并将其保存为新的计划版本。"""
+        action = self._require_current_action(state)
+        if action.action_type is not ActionType.UPDATE_PLAN:
+            raise RuntimeError("apply_plan only accepts update_plan actions")
+
+        next_version = state["plan_version"] + 1
+        try:
+            revision = self._plan_manager.create_revision(
+                items=action.plan,
+                version=next_version,
+                reason=action.reason,
+            )
+        except ValueError as error:
+            error_text = str(error)
+            event = self._new_event(
+                state,
+                event_type=EventType.ACTION_BLOCKED,
+                node="apply_plan",
+                action=action,
+                decision=error_text,
+            )
+            return {
+                "terminal_status": HarnessStatus.BLOCKED,
+                "errors": [*state["errors"], error_text],
+                "trajectory": [*state["trajectory"], event],
+            }
+
+        event_type = (
+            EventType.PLAN_CREATED if state["plan_version"] == 0 else EventType.PLAN_REVISED
+        )
+        event = self._new_event(
+            state,
+            event_type=event_type,
+            node="apply_plan",
+            action=action,
+            observation=revision.model_dump(mode="json"),
+            decision=revision.reason,
+        )
+
+        return {
+            # revision 是历史快照；plan 是当前模型上下文和执行路径使用的版本。
+            "plan": [item.model_copy(deep=True) for item in revision.items],
+            "plan_version": revision.version,
+            "plan_history": [*state["plan_history"], revision],
+            "replan_requested": False,
+            "trajectory": [*state["trajectory"], event],
         }
 
     def _policy_check(self, state: DiagnosisState) -> dict[str, Any]:
@@ -701,13 +765,20 @@ class HarnessLoop:
             return "finish"
         return "policy_check"
 
+    @staticmethod
+    def _route_after_plan_application(state: DiagnosisState) -> str:
+        """无效计划已终止时不再请求模型，合法计划才继续诊断。"""
+        return "finish" if state.get("terminal_status") is not None else "build_context"
+
     def _route_after_policy(self, state: DiagnosisState) -> str:
-        """将策略决策映射为工具节点或终止节点。"""
+        """将策略决策映射为计划、工具或终止节点。"""
         decision = self._require_policy_decision(state)
         if decision.outcome is not PolicyOutcome.ALLOW:
             return "finish"
 
         action = self._require_current_action(state)
+        if action.action_type is ActionType.UPDATE_PLAN:
+            return "apply_plan"
         if action.action_type is ActionType.CALL_TOOL:
             return "execute_tool"
         return "finish"

@@ -14,6 +14,7 @@ from app.models.contracts import (
     DiagnosisState,
     EvidenceItem,
     PlanItem,
+    PlanRevision,
     PolicyDecision,
     ProgressAssessment,
     ProgressStatus,
@@ -38,6 +39,9 @@ class RunStateRestorer:
 
             state["budget"] = BudgetState.model_validate(state["budget"])
             state["plan"] = [PlanItem.model_validate(item) for item in state["plan"]]
+            state["plan_history"] = [
+                PlanRevision.model_validate(item) for item in state.get("plan_history", [])
+            ]
             state["evidence"] = [EvidenceItem.model_validate(item) for item in state["evidence"]]
 
             if state.get("current_action") is not None:

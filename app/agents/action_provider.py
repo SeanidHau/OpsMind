@@ -32,6 +32,10 @@ class LangChainActionProvider:
     不要声称执行过工具；工具执行由 Harness 完成。
     证据不足时，选择 call_tool 或 ask_user。
 
+    当 plan_version 为 0 时，先选择 update_plan，并提交 2 到 5 个可执行计划项。
+    当 replan_requested 为 true 时，必须先选择 update_plan，说明新证据或停滞原因，
+    再选择新的工具路径。只有 update_plan 可以携带 plan 字段。
+
     只有证据足够时才选择 final_answer。final_answer 必须携带 report。
     report 的摘要、候选根因和建议必须基于当前 context；
     report.evidence_ids 只能引用 context 中形如 evidence:<evidence_id> 的条目，
@@ -54,6 +58,8 @@ class LangChainActionProvider:
             # 只传递 Context Manager 已筛选的条目，隔离运行时内部状态。
             "context": [item.model_dump(mode="json") for item in model_context.items],
             "truncated": model_context.truncated,
+            "plan_version": state["plan_version"],
+            "replan_requested": state.get("replan_requested", False),
         }
         messages: list[BaseMessage] = [
             SystemMessage(content=self._SYSTEM_INSTRUCTION),

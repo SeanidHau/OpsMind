@@ -22,6 +22,7 @@ from app.models.contracts import (
     EvidenceItem,
     HarnessStatus,
     PlanItem,
+    PlanRevision,
     PolicyDecision,
     PolicyOutcome,
     ProgressAssessment,
@@ -53,6 +54,13 @@ def populated_snapshot() -> RunSnapshot:
     state.update(
         {
             "plan": [PlanItem(title="查询指标", rationale="验证错误率")],
+            "plan_history": [
+                PlanRevision(
+                    version=1,
+                    reason="建立初始诊断计划。",
+                    items=[PlanItem(title="查询指标", rationale="验证错误率")],
+                )
+            ],
             "evidence": [evidence],
             "current_action": AgentAction(
                 action_type=ActionType.CALL_TOOL,
@@ -110,6 +118,7 @@ def test_restorer_rebuilds_key_contract_types() -> None:
 
     assert isinstance(restored["budget"], BudgetState)
     assert isinstance(restored["plan"][0], PlanItem)
+    assert isinstance(restored["plan_history"][0], PlanRevision)
     assert isinstance(restored["evidence"][0], EvidenceItem)
     assert isinstance(restored["current_action"], AgentAction)
     assert isinstance(restored["policy_decision"], PolicyDecision)
@@ -136,6 +145,16 @@ def test_restorer_rejects_snapshot_missing_required_state() -> None:
 
     with pytest.raises(ValueError, match="snapshot cannot be restored"):
         RunStateRestorer().restore(snapshot)
+
+
+def test_restorer_accepts_checkpoint_created_before_plan_history() -> None:
+    """第 29 阶段之前的 checkpoint 缺少计划历史时仍可恢复。"""
+    snapshot = populated_snapshot()
+    snapshot.final_state.pop("plan_history")
+
+    restored = RunStateRestorer().restore(snapshot)
+
+    assert restored["plan_history"] == []
 
 
 class UnusedActionProvider:
