@@ -174,4 +174,7 @@ def test_loop_resolves_archived_approval_without_running_graph() -> None:
     )
 
     assert resolved["terminal_status"] is None
-    assert resolved["trajectory"][-1].event_type is EventType.RUN_RESUMED
+    assert resolved["trajectory"][-2].event_type is EventType.RUN_RESUMED
+    assert resolved["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
+    persisted = archive.load(snapshot.run_id)
+    assert persisted.trajectory[-1].event_type is EventType.CHECKPOINT_SAVED

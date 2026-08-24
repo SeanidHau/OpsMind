@@ -23,6 +23,7 @@ from app.models.contracts import (
     AgentAction,
     AgentEvent,
     ApprovalCommand,
+    ApprovalDecision,
     BudgetConsumption,
     BudgetState,
     DiagnosisState,
@@ -132,28 +133,62 @@ class HarnessLoop:
         self._graph = self._build_graph()
 
     async def run(self, state: DiagnosisState) -> DiagnosisState:
-        """运行图，并将结束状态保存为可重放快照。"""
-        result = cast(DiagnosisState, await self._graph.ainvoke(state))
+        """运行新任务图，并保存首次 checkpoint。"""
+        return await self._run_and_archive(state, replace_checkpoint=False)
 
+    async def resume_approved(self, run_id: UUID) -> DiagnosisState:
+        """从已批准 checkpoint 续跑，并替换该运行的最新快照。"""
+        state = self.restore_checkpoint(run_id)
+        resolution = state.get("approval_resolution")
+
+        if resolution is None or resolution.decision is not ApprovalDecision.APPROVE:
+            raise ValueError("run does not have an approved pending action")
+        if state.get("terminal_status") is not None:
+            raise ValueError("approved run must not have a terminal status")
+
+        return await self._run_and_archive(state, replace_checkpoint=True)
+
+    async def _run_and_archive(
+        self,
+        state: DiagnosisState,
+        *,
+        replace_checkpoint: bool,
+    ) -> DiagnosisState:
+        """执行图，并以新增或替换方式归档结束状态。"""
+        result = cast(DiagnosisState, await self._graph.ainvoke(state))
+        return self._archive_state(result, replace_checkpoint=replace_checkpoint)
+
+    def _archive_state(
+        self,
+        state: DiagnosisState,
+        *,
+        replace_checkpoint: bool,
+    ) -> DiagnosisState:
+        """追加 checkpoint 事件并保存或替换归档快照。"""
         checkpoint_event = self._new_event(
-            result,
+            state,
             event_type=EventType.CHECKPOINT_SAVED,
             node="run_archive",
-            observation={"run_id": result["run_id"]},
+            observation={"run_id": state["run_id"]},
             decision="运行快照已保存。",
         )
-        result_with_checkpoint = cast(
+        state_with_checkpoint = cast(
             DiagnosisState,
             {
-                **result,
-                "trajectory": [*result["trajectory"], checkpoint_event],
+                **state,
+                "trajectory": [*state["trajectory"], checkpoint_event],
             },
         )
 
         # 先把 checkpoint 事件写入快照，再归档，保证回放轨迹完整。
-        snapshot = self._snapshot_factory.build(result_with_checkpoint)
-        self._run_archive.save(snapshot)
-        return result_with_checkpoint
+        snapshot = self._snapshot_factory.build(state_with_checkpoint)
+
+        if replace_checkpoint:
+            self._run_archive.replace(snapshot)
+        else:
+            self._run_archive.save(snapshot)
+
+        return state_with_checkpoint
 
     def replay_cached(self, run_id: UUID) -> ReplayResult:
         """只读回放指定运行，不执行模型、工具或 LangGraph 节点。"""
@@ -173,7 +208,10 @@ class HarnessLoop:
         """恢复待审批 checkpoint 并返回已记录审批决议的状态。"""
         state = self.restore_checkpoint(run_id)
         updates = self._approval_resolver.resolve(state=state, command=command)
-        return cast(DiagnosisState, {**state, **updates})
+        resolved_state = cast(DiagnosisState, {**state, **updates})
+
+        # 审批决议本身也必须成为可恢复 checkpoint。
+        return self._archive_state(resolved_state, replace_checkpoint=True)
 
     def _build_graph(
         self,
@@ -186,9 +224,17 @@ class HarnessLoop:
         graph.add_node("execute_tool", self._execute_tool)
         graph.add_node("verify_progress", self._verify_progress)
         graph.add_node("build_context", self._build_context)
+        graph.add_node("approve_action", self._approve_action)
         graph.add_node("finish", self._finish)
 
-        graph.add_edge(START, "build_context")
+        graph.add_conditional_edges(
+            START,
+            self._route_from_start,
+            {
+                "build_context": "build_context",
+                "approve_action": "approve_action",
+            },
+        )
         graph.add_edge("build_context", "propose_action")
         graph.add_conditional_edges(
             "propose_action",
@@ -224,9 +270,50 @@ class HarnessLoop:
                 "finish": "finish",
             },
         )
+        graph.add_conditional_edges(
+            "approve_action",
+            self._route_after_approved_action,
+            {
+                "execute_tool": "execute_tool",
+                "finish": "finish",
+            },
+        )
         graph.add_edge("finish", END)
 
         return graph.compile()
+
+    def _approve_action(self, state: DiagnosisState) -> dict[str, Any]:
+        """对已批准动作重新校验工具与预算，再直接执行原工具。"""
+        resolution = state.get("approval_resolution")
+        action = self._require_current_action(state)
+
+        if resolution is None or resolution.decision is not ApprovalDecision.APPROVE:
+            raise RuntimeError("approve_action requires an approved resolution")
+        if resolution.action != action:
+            raise RuntimeError("approved action does not match the current action")
+
+        # 审批不绕过工具注册和预算；只绕过重复的人工作业等待。
+        decision = self._policy.evaluate(action, state["budget"])
+        if decision.outcome is PolicyOutcome.BLOCK:
+            event = self._new_event(
+                state,
+                event_type=EventType.ACTION_BLOCKED,
+                node="approve_action",
+                action=action,
+                decision=decision.reason,
+            )
+            return {
+                "policy_decision": decision,
+                "terminal_status": HarnessStatus.BLOCKED,
+                "errors": [*state["errors"], decision.reason],
+                "trajectory": [*state["trajectory"], event],
+            }
+
+        return {
+            "policy_decision": decision,
+            "budget": BudgetManager.consume(state["budget"], decision.consumption),
+            "step_count": state["step_count"] + 1,
+        }
 
     async def _propose_action(self, state: DiagnosisState) -> dict[str, Any]:
         """在模型预算允许时调用动作提供器，并写入审计轨迹。"""
@@ -589,6 +676,23 @@ class HarnessLoop:
             "errors": [*state["errors"], error_text],
             "trajectory": [*state["trajectory"], event],
         }
+
+    @staticmethod
+    def _route_from_start(state: DiagnosisState) -> str:
+        """已批准且未终止的 checkpoint 直接续跑原工具动作。"""
+        resolution = state.get("approval_resolution")
+        if (
+            state.get("terminal_status") is None
+            and resolution is not None
+            and resolution.decision is ApprovalDecision.APPROVE
+        ):
+            return "approve_action"
+        return "build_context"
+
+    @staticmethod
+    def _route_after_approved_action(state: DiagnosisState) -> str:
+        """批准后仅在预算或工具策略仍允许时执行原工具。"""
+        return "finish" if state.get("terminal_status") is not None else "execute_tool"
 
     @staticmethod
     def _route_after_proposal(state: DiagnosisState) -> str:

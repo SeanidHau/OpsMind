@@ -65,6 +65,22 @@ def test_archive_rejects_duplicate_and_isolates_nested_mutation() -> None:
         archive.load(uuid4())
 
 
+def test_archive_replaces_existing_snapshot_and_rejects_unknown_run() -> None:
+    """替换只允许覆盖已有运行，且继续保持快照隔离。"""
+    archive = InMemoryRunArchive()
+    snapshot = RunSnapshotFactory().build(make_state())  # type: ignore[arg-type]
+    archive.save(snapshot)
+
+    replacement = archive.load(snapshot.run_id)
+    replacement.final_state["user_query"] = "审批决议已写入"
+    archive.replace(replacement)
+    replacement.final_state["user_query"] = "调用方后续修改"
+
+    assert archive.load(snapshot.run_id).final_state["user_query"] == "审批决议已写入"
+    with pytest.raises(KeyError, match="snapshot not found"):
+        archive.replace(RunSnapshotFactory().build(make_state()))  # type: ignore[arg-type]
+
+
 class QueueActionProvider:
     """提供一次固定最终回答，避免测试依赖真实模型。"""
 

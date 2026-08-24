@@ -22,6 +22,9 @@ class RunArchive(Protocol):
     def load(self, run_id: UUID) -> RunSnapshot:
         """按运行 ID 返回已保存的快照。"""
 
+    def replace(self, snapshot: RunSnapshot) -> None:
+        """替换已存在运行的最新快照。"""
+
 
 class InMemoryRunArchive:
     """用于本地开发和测试的进程内快照归档。"""
@@ -42,6 +45,13 @@ class InMemoryRunArchive:
             return self._snapshots[run_id].model_copy(deep=True)
         except KeyError as error:
             raise KeyError(f"snapshot not found for run: {run_id}") from error
+
+    def replace(self, snapshot: RunSnapshot) -> None:
+        """用深拷贝替换已有快照，拒绝不存在的运行。"""
+        if snapshot.run_id not in self._snapshots:
+            raise KeyError(f"snapshot not found for run: {snapshot.run_id}")
+
+        self._snapshots[snapshot.run_id] = snapshot.model_copy(deep=True)
 
 
 class RunSnapshotFactory:
