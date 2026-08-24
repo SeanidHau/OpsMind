@@ -454,16 +454,21 @@ class HarnessLoop:
 
             # 每一次实际模型请求都先消费一次模型调用预算。
             updated_budget = BudgetManager.consume(updated_budget, model_consumption)
-            model_event = self._new_event(
-                state,
-                event_type=EventType.MODEL_CALLED,
-                node="propose_action",
-                decision=f"开始第 {attempt + 1} 次模型调用",
-            )
+
+            model_started_at = time.perf_counter()
 
             try:
                 action = await self._action_provider.propose_action(state)
             except Exception as error:
+                model_latency_ms = self._elapsed_latency_ms(model_started_at)
+                model_event = self._new_event(
+                    state,
+                    event_type=EventType.MODEL_CALLED,
+                    node="propose_action",
+                    decision=f"第 {attempt + 1} 次模型调用失败。",
+                    error=str(error)[:4_000],
+                    latency_ms=model_latency_ms,
+                )
                 failure = self._model_failure_classifier.classify(error)
                 failure_reasons.append(failure.message)
 
@@ -519,19 +524,27 @@ class HarnessLoop:
                 delay_seconds = self._model_retry_delay_seconds * (2**attempt)
                 await asyncio.sleep(delay_seconds)
                 continue
-
-            action_event = self._new_event(
-                state,
-                event_type=EventType.ACTION_PROPOSED,
-                node="propose_action",
-                action=action,
-                decision=action.reason,
-            )
-            return {
-                "budget": updated_budget,
-                "current_action": action,
-                "trajectory": [*trajectory, model_event, action_event],
-            }
+            else:
+                model_latency_ms = self._elapsed_latency_ms(model_started_at)
+                model_event = self._new_event(
+                    state,
+                    event_type=EventType.MODEL_CALLED,
+                    node="propose_action",
+                    decision=f"第 {attempt + 1} 次模型调用已完成。",
+                    latency_ms=model_latency_ms,
+                )
+                action_event = self._new_event(
+                    state,
+                    event_type=EventType.ACTION_PROPOSED,
+                    node="propose_action",
+                    action=action,
+                    decision=action.reason,
+                )
+                return {
+                    "budget": updated_budget,
+                    "current_action": action,
+                    "trajectory": [*trajectory, model_event, action_event],
+                }
 
         raise RuntimeError("model retry loop exited unexpectedly")
 
@@ -675,10 +688,13 @@ class HarnessLoop:
             node="execute_tool",
             action=action,
         )
+        # 仅测量真实 ToolExecutor 调用，不包含策略检查和证据处理。
+        tool_started_at = time.perf_counter()
 
         try:
             result = await self._tool_executor.execute(action)
         except Exception as error:
+            tool_latency_ms = self._elapsed_latency_ms(tool_started_at)
             failure = self._tool_failure_classifier.classify(error)
             retry_count = state["retry_count"] + 1
             attempted_tool_calls = state["tool_call_count"] + 1
@@ -697,6 +713,7 @@ class HarnessLoop:
                     observation=failure_observation,
                     decision="工具调用失败，错误分类策略禁止自动重试。",
                     error=failure.message,
+                    latency_ms=tool_latency_ms,
                 )
                 return {
                     "terminal_status": HarnessStatus.FAILED,
@@ -723,6 +740,7 @@ class HarnessLoop:
                         observation=failure_observation,
                         decision=f"工具调用失败，准备第 {retry_count} 次重试。",
                         error=failure.message,
+                        latency_ms=tool_latency_ms,
                     )
                     return {
                         "budget": BudgetManager.consume(
@@ -743,6 +761,7 @@ class HarnessLoop:
                     observation=failure_observation,
                     decision=block_reason,
                     error=failure.message,
+                    latency_ms=tool_latency_ms,
                 )
                 return {
                     "terminal_status": HarnessStatus.BLOCKED,
@@ -760,6 +779,7 @@ class HarnessLoop:
                 observation=failure_observation,
                 decision="可重试工具错误在重试次数耗尽后仍然失败。",
                 error=failure.message,
+                latency_ms=tool_latency_ms,
             )
             return {
                 "terminal_status": HarnessStatus.FAILED,
@@ -798,6 +818,8 @@ class HarnessLoop:
             node="execute_tool",
             action=action,
             observation=result,
+            # TOOL_FINISHED 记录本次真实工具调用的耗时。
+            latency_ms=self._elapsed_latency_ms(tool_started_at),
         )
         observation_event = self._new_event(
             state,
@@ -1064,6 +1086,12 @@ class HarnessLoop:
         return decision
 
     @staticmethod
+    def _elapsed_latency_ms(started_at: float) -> int:
+        """将单调时钟的耗时转换为非负整数毫秒。"""
+        # 向上取整，避免实际调用被记录为 0 ms。
+        return math.ceil(max(0.0, (time.perf_counter() - started_at) * 1_000))
+
+    @staticmethod
     def _new_event(
         state: DiagnosisState,
         *,
@@ -1073,6 +1101,7 @@ class HarnessLoop:
         observation: dict[str, Any] | None = None,
         decision: str | None = None,
         error: str | None = None,
+        latency_ms: int | None = None,
     ) -> AgentEvent:
         """创建与当前状态关联的统一审计事件。"""
         return AgentEvent(
@@ -1084,4 +1113,5 @@ class HarnessLoop:
             observation=observation,
             decision=decision,
             error=error,
+            latency_ms=latency_ms,
         )
