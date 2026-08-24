@@ -15,6 +15,7 @@ from app.harness.policy import ActionPolicy
 from app.harness.progress import ProgressVerifier
 from app.harness.replay import CachedReplayService
 from app.harness.report_renderer import MarkdownReportRenderer
+from app.harness.restore import RunStateRestorer
 from app.harness.snapshot import InMemoryRunArchive, RunArchive, RunSnapshotFactory
 from app.models.contracts import (
     ActionType,
@@ -123,6 +124,7 @@ class HarnessLoop:
         self._run_archive = run_archive or InMemoryRunArchive()
         self._cached_replay = CachedReplayService(self._run_archive)
         self._snapshot_factory = RunSnapshotFactory()
+        self._state_restorer = RunStateRestorer()
         self._graph = self._build_graph()
 
     async def run(self, state: DiagnosisState) -> DiagnosisState:
@@ -152,6 +154,11 @@ class HarnessLoop:
     def replay_cached(self, run_id: UUID) -> ReplayResult:
         """只读回放指定运行，不执行模型、工具或 LangGraph 节点。"""
         return self._cached_replay.replay(run_id)
+
+    def restore_checkpoint(self, run_id: UUID) -> DiagnosisState:
+        """恢复指定快照的强类型状态，不执行模型、工具或图节点。"""
+        snapshot = self._run_archive.load(run_id)
+        return self._state_restorer.restore(snapshot)
 
     def _build_graph(
         self,
