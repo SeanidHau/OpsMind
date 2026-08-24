@@ -36,6 +36,7 @@ class EventType(StrEnum):
     PLAN_CREATED = "plan_created"
     CONTEXT_BUILT = "context_built"
     MODEL_CALLED = "model_called"
+    MODEL_RETRY = "model_retry"
     ACTION_PROPOSED = "action_proposed"
     ACTION_BLOCKED = "action_blocked"
     TOOL_STARTED = "tool_started"

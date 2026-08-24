@@ -117,6 +117,8 @@ class HarnessLoop:
         progress_verifier: ProgressVerifier | None = None,
         context_manager: ContextManager | None = None,
         max_tool_retries: int = 2,
+        max_model_retries: int = 2,
+        model_retry_delay_seconds: float = 0.25,
         evidence_collector: EvidenceCollector | None = None,
         evidence_gate: EvidenceGate | None = None,
         report_renderer: MarkdownReportRenderer | None = None,
@@ -125,6 +127,11 @@ class HarnessLoop:
     ) -> None:
         if max_tool_retries < 0:
             raise ValueError("max_tool_retries must not be negative")
+
+        if max_model_retries < 0:
+            raise ValueError("max_model_retries must not be negative")
+        if model_retry_delay_seconds < 0:
+            raise ValueError("model_retry_delay_seconds must not be negative")
 
         if max_replan_corrections < 0:
             raise ValueError("max_replan_corrections must not be negative")
@@ -136,7 +143,9 @@ class HarnessLoop:
         self._plan_manager = PlanManager()
         self._context_manager = context_manager or ContextManager()
         self._max_tool_retries = max_tool_retries
+        self._max_model_retries = max_model_retries
         self._max_replan_corrections = max_replan_corrections
+        self._model_retry_delay_seconds = model_retry_delay_seconds
         self._evidence_collector = evidence_collector or EvidenceCollector()
         self._evidence_gate = evidence_gate or EvidenceGate()
         self._report_renderer = report_renderer or MarkdownReportRenderer()
@@ -405,47 +414,90 @@ class HarnessLoop:
         }
 
     async def _propose_action(self, state: DiagnosisState) -> dict[str, Any]:
-        """在模型预算允许时调用动作提供器，并写入审计轨迹。"""
+        """在预算边界内调用模型，并对临时失败进行有限重试。"""
         model_consumption = BudgetConsumption(model_calls=1)
-        exceeded = BudgetManager.exceeded_dimensions(state["budget"], model_consumption)
+        updated_budget = state["budget"]
+        trajectory = list(state["trajectory"])
+        failure_reasons: list[str] = []
 
-        if exceeded:
-            block_reason = "调用模型会超出本次运行预算。"
-            blocked_event = self._new_event(
+        for attempt in range(self._max_model_retries + 1):
+            exceeded = BudgetManager.exceeded_dimensions(
+                updated_budget,
+                model_consumption,
+            )
+            if exceeded:
+                block_reason = "调用模型会超出本次运行预算。"
+                blocked_event = self._new_event(
+                    state,
+                    event_type=EventType.ACTION_BLOCKED,
+                    node="propose_action",
+                    decision=block_reason,
+                )
+                return {
+                    "budget": updated_budget,
+                    "terminal_status": HarnessStatus.BLOCKED,
+                    "errors": [*state["errors"], *failure_reasons, block_reason],
+                    "trajectory": [*trajectory, blocked_event],
+                }
+
+            # 每一次实际模型请求都先消费一次模型调用预算。
+            updated_budget = BudgetManager.consume(updated_budget, model_consumption)
+            model_event = self._new_event(
                 state,
-                event_type=EventType.ACTION_BLOCKED,
+                event_type=EventType.MODEL_CALLED,
                 node="propose_action",
-                decision=block_reason,
+                decision=f"开始第 {attempt + 1} 次模型调用",
+            )
+
+            try:
+                action = await self._action_provider.propose_action(state)
+            except Exception as error:
+                error_text = str(error)[:4_000]
+                failure_reasons.append(error_text)
+
+                if attempt >= self._max_model_retries:
+                    failed_event = self._new_event(
+                        state,
+                        event_type=EventType.RUN_FAILED,
+                        node="propose_action",
+                        error=error_text,
+                        decision="模型调用在重试次数耗尽后仍然失败。",
+                    )
+                    return {
+                        "budget": updated_budget,
+                        "terminal_status": HarnessStatus.FAILED,
+                        "errors": [*state["errors"], *failure_reasons],
+                        "trajectory": [*trajectory, model_event, failed_event],
+                    }
+
+                retry_event = self._new_event(
+                    state,
+                    event_type=EventType.MODEL_RETRY,
+                    node="propose_action",
+                    decision=f"模型调用失败，准备第 {attempt + 1} 次重试。",
+                    error=error_text,
+                )
+                trajectory.extend((model_event, retry_event))
+
+                # 指数退避仍受第 32 阶段的总运行时限约束。
+                delay_seconds = self._model_retry_delay_seconds * (2**attempt)
+                await asyncio.sleep(delay_seconds)
+                continue
+
+            action_event = self._new_event(
+                state,
+                event_type=EventType.ACTION_PROPOSED,
+                node="propose_action",
+                action=action,
+                decision=action.reason,
             )
             return {
-                "terminal_status": HarnessStatus.BLOCKED,
-                "errors": [*state["errors"], block_reason],
-                "trajectory": [*state["trajectory"], blocked_event],
+                "budget": updated_budget,
+                "current_action": action,
+                "trajectory": [*trajectory, model_event, action_event],
             }
 
-        # 先消费预算，再调用模型，避免模型调用成功后才发现预算不足。
-        updated_budget = BudgetManager.consume(state["budget"], model_consumption)
-        action = await self._action_provider.propose_action(state)
-
-        model_event = self._new_event(
-            state,
-            event_type=EventType.MODEL_CALLED,
-            node="propose_action",
-            decision="模型已返回候选动作。",
-        )
-        action_event = self._new_event(
-            state,
-            event_type=EventType.ACTION_PROPOSED,
-            node="propose_action",
-            action=action,
-            decision=action.reason,
-        )
-
-        return {
-            "budget": updated_budget,
-            "current_action": action,
-            "trajectory": [*state["trajectory"], model_event, action_event],
-        }
+        raise RuntimeError("model retry loop exited unexpectedly")
 
     def _apply_plan(self, state: DiagnosisState) -> dict[str, Any]:
         """校验模型提交的完整计划，并将其保存为新的计划版本。"""
