@@ -101,6 +101,7 @@ class ApprovalDecision(StrEnum):
     """人工审批对待执行动作作出的决定。"""
 
     APPROVE = "approve"
+    EDIT = "edit"
     REJECT = "reject"
 
 
@@ -510,6 +511,22 @@ class ApprovalCommand(BaseModel):
 
     decision: ApprovalDecision
     reason: str = Field(min_length=1, max_length=2_000)
+
+    # 只有 edit 可以携带修改后的工具动作
+    edited_action: AgentAction | None = None
+
+    @model_validator(mode="after")
+    def validate_edit_action(self) -> Self:
+        """限制编辑命令只能提交一个工具动作。"""
+        if self.decision is ApprovalDecision.EDIT:
+            if self.edited_action is None:
+                raise ValueError("edited_action is required for edit decisions")
+            if self.edited_action.action_type is not ActionType.CALL_TOOL:
+                raise ValueError("edited_action must be a call_tool action")
+        elif self.edited_action is not None:
+            raise ValueError("edited_action is only allowed for edit decisions")
+
+        return self
 
 
 class ApprovalResolution(BaseModel):

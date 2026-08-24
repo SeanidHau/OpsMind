@@ -153,7 +153,10 @@ class HarnessLoop:
         state = self.restore_checkpoint(run_id)
         resolution = state.get("approval_resolution")
 
-        if resolution is None or resolution.decision is not ApprovalDecision.APPROVE:
+        if resolution is None or resolution.decision not in (
+            ApprovalDecision.APPROVE,
+            ApprovalDecision.EDIT,
+        ):
             raise ValueError("run does not have an approved pending action")
         if state.get("terminal_status") is not None:
             raise ValueError("approved run must not have a terminal status")
@@ -323,7 +326,10 @@ class HarnessLoop:
         resolution = state.get("approval_resolution")
         action = self._require_current_action(state)
 
-        if resolution is None or resolution.decision is not ApprovalDecision.APPROVE:
+        if resolution is None or resolution.decision not in (
+            ApprovalDecision.APPROVE,
+            ApprovalDecision.EDIT,
+        ):
             raise RuntimeError("approve_action requires an approved resolution")
         if resolution.action != action:
             raise RuntimeError("approved action does not match the current action")
@@ -809,7 +815,7 @@ class HarnessLoop:
         if (
             state.get("terminal_status") is None
             and resolution is not None
-            and resolution.decision is ApprovalDecision.APPROVE
+            and resolution.decision in (ApprovalDecision.APPROVE, ApprovalDecision.EDIT)
         ):
             return "approve_action"
         return "build_context"

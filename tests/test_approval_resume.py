@@ -154,6 +154,46 @@ async def test_approved_checkpoint_executes_original_action_without_reproposal()
 
 
 @pytest.mark.asyncio
+async def test_edited_checkpoint_executes_edited_action_without_reproposal() -> None:
+    """编辑审批后，续跑必须执行新参数而不是 checkpoint 中的原参数。"""
+    archive = InMemoryRunArchive()
+    original_action = high_risk_action().model_copy(
+        update={"tool_args": {"service": "payment-service", "strategy": "restart"}}
+    )
+    edited_action = original_action.model_copy(
+        update={"tool_args": {"service": "payment-service", "strategy": "canary"}}
+    )
+    provider = QueueActionProvider([original_action, final_answer_action()])
+    executor = RecordingToolExecutor()
+    loop = make_loop(provider=provider, executor=executor, archive=archive)
+
+    waiting = await loop.run(make_state())  # type: ignore[arg-type]
+    run_id = UUID(waiting["run_id"])
+    resolved = loop.resolve_approval(
+        run_id=run_id,
+        command=ApprovalCommand(
+            decision=ApprovalDecision.EDIT,
+            reason="降低风险，改为灰度执行。",
+            edited_action=edited_action,
+        ),
+    )
+
+    assert resolved["current_action"] == edited_action
+    assert resolved["approval_resolution"].decision is ApprovalDecision.EDIT
+    restored = loop.restore_checkpoint(run_id)
+    assert restored["current_action"] == edited_action
+    assert restored["approval_resolution"].action == edited_action
+
+    result = await loop.resume_approved(run_id)
+
+    assert result["terminal_status"] is HarnessStatus.COMPLETED
+    assert provider.calls == 2
+    assert executor.actions == [edited_action]
+    assert result["budget"].used_steps == 2
+    assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
+
+
+@pytest.mark.asyncio
 async def test_rejected_checkpoint_cannot_resume() -> None:
     """审批拒绝后的 checkpoint 不得再次进入工具执行路径。"""
     archive = InMemoryRunArchive()

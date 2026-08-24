@@ -36,21 +36,34 @@ class ApprovalResolver:
         if action is None or action.action_type is not ActionType.CALL_TOOL:
             raise ValueError("approval requires a pending tool action")
 
+        effective_action = action
+        if command.decision is ApprovalDecision.EDIT:
+            edited_action = command.edited_action
+            if edited_action is None:
+                # ApprovalCommand 已校验；保留防御性检查保护直接调用。
+                raise RuntimeError("edit decision requires an edited action")
+            if edited_action.tool_name != action.tool_name:
+                raise ValueError("edited action must preserve the pending tool name")
+
+            # 允许修改参数，但不允许借编辑审批替换高风险工具。
+            effective_action = edited_action
+
         resolution = ApprovalResolution(
             decision=command.decision,
             reason=command.reason,
-            action=action,
+            action=effective_action,
         )
 
-        if command.decision is ApprovalDecision.APPROVE:
+        if command.decision in (ApprovalDecision.APPROVE, ApprovalDecision.EDIT):
             event = self._new_event(
                 state=state,
                 event_type=EventType.RUN_RESUMED,
-                action=action,
+                action=effective_action,
                 decision=command.reason,
             )
             return {
-                # 下一阶段将依据该决议直接路由到已获批的工具动作。
+                # resume_approved() 将依据决议直接路由到获批的有效工具动作。
+                "current_action": effective_action,
                 "terminal_status": None,
                 "approval_request": None,
                 "approval_resolution": resolution,
@@ -61,7 +74,7 @@ class ApprovalResolver:
         event = self._new_event(
             state=state,
             event_type=EventType.ACTION_BLOCKED,
-            action=action,
+            action=effective_action,
             decision=rejection_reason,
         )
         return {

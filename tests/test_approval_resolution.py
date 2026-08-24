@@ -99,6 +99,79 @@ def test_rejected_resolution_blocks_pending_action() -> None:
     assert updates["trajectory"][-1].event_type is EventType.ACTION_BLOCKED
 
 
+def test_edit_resolution_replaces_only_the_pending_tool_parameters() -> None:
+    """编辑审批可更新同一工具的参数，并把有效动作写回状态。"""
+    state = waiting_state()
+    original_action = state["current_action"]
+    assert isinstance(original_action, AgentAction)
+    edited_action = original_action.model_copy(
+        update={"tool_args": {"service": "payment-service", "strategy": "canary"}}
+    )
+
+    updates = ApprovalResolver().resolve(
+        state=state,  # type: ignore[arg-type]
+        command=ApprovalCommand(
+            decision=ApprovalDecision.EDIT,
+            reason="将重启策略调整为灰度执行。",
+            edited_action=edited_action,
+        ),
+    )
+
+    assert updates["terminal_status"] is None
+    assert updates["current_action"] == edited_action
+    assert updates["approval_resolution"].decision is ApprovalDecision.EDIT
+    assert updates["approval_resolution"].action == edited_action
+    assert updates["trajectory"][-1].action == edited_action
+
+
+def test_edit_resolution_rejects_a_different_tool() -> None:
+    """编辑审批不能把原高风险工具替换为另一种工具。"""
+    state = waiting_state()
+    replacement_action = AgentAction(
+        action_type=ActionType.CALL_TOOL,
+        intent="创建工单",
+        tool_name="create_ticket",
+        reason="测试工具替换拦截。",
+    )
+
+    with pytest.raises(ValueError, match="preserve the pending tool name"):
+        ApprovalResolver().resolve(
+            state=state,  # type: ignore[arg-type]
+            command=ApprovalCommand(
+                decision=ApprovalDecision.EDIT,
+                reason="尝试替换工具。",
+                edited_action=replacement_action,
+            ),
+        )
+
+
+def test_edit_command_requires_a_call_tool_and_forbids_non_edit_payload() -> None:
+    """命令契约必须拒绝缺失、非工具或非编辑场景的编辑动作。"""
+    with pytest.raises(ValueError, match="edited_action is required"):
+        ApprovalCommand(decision=ApprovalDecision.EDIT, reason="缺少编辑动作。")
+    with pytest.raises(ValueError, match="edited_action must be a call_tool"):
+        ApprovalCommand(
+            decision=ApprovalDecision.EDIT,
+            reason="编辑动作类型错误。",
+            edited_action=AgentAction(
+                action_type=ActionType.ASK_USER,
+                intent="补充时间窗口",
+                reason="这不是工具动作。",
+            ),
+        )
+    with pytest.raises(ValueError, match="only allowed for edit"):
+        ApprovalCommand(
+            decision=ApprovalDecision.APPROVE,
+            reason="普通批准不能携带编辑动作。",
+            edited_action=AgentAction(
+                action_type=ActionType.CALL_TOOL,
+                intent="生成方案",
+                tool_name="generate_restart_plan",
+                reason="测试契约。",
+            ),
+        )
+
+
 def test_resolver_rejects_state_without_pending_approval() -> None:
     """非等待审批状态不能被伪造为审批恢复。"""
     state = waiting_state()
