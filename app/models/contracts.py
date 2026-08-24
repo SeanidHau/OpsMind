@@ -477,6 +477,28 @@ class ReplayResult(BaseModel):
     replayed_at: datetime = Field(default_factory=utc_now)
 
 
+class EvaluationCheck(BaseModel):
+    """一条可解释的轨迹质量检查结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=100)
+    passed: bool
+    detail: str = Field(min_length=1, max_length=2_000)
+
+
+class TrajectoryEvaluation(BaseModel):
+    """对单次已归档运行进行的确定性离线评测。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID
+    passed: bool
+    score: float = Field(ge=0, le=1)
+    checks: list[EvaluationCheck] = Field(min_length=1)
+    evaluated_at: datetime = Field(default_factory=utc_now)
+
+
 class DiagnosisState(TypedDict):
     """LangGraph 节点间传递的完整诊断状态。"""
 
@@ -542,6 +564,7 @@ __all__ = [
     "ContextSource",
     "DiagnosisState",
     "DiagnosisState",
+    "EvaluationCheck",
     "EventType",
     "EvidenceItem",
     "FusedRetrievalHit",
@@ -563,5 +586,6 @@ __all__ = [
     "ToolDefinition",
     "ToolPolicy",
     "ToolRiskLevel",
+    "TrajectoryEvaluation",
     "VectorizedChunk",
 ]
