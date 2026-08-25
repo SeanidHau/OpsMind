@@ -407,8 +407,12 @@ class HarnessLoop:
         if resolution.action != action:
             raise RuntimeError("approved action does not match the current action")
 
-        # 审批不绕过工具注册和预算；只绕过重复的人工作业等待。
-        decision = self._policy.evaluate(action, state["budget"])
+        # 审批不绕过工具注册、重复调用检查和预算；只绕过重复的人工作业等待。
+        decision = self._policy.evaluate(
+            action,
+            state["budget"],
+            previous_successful_tool_actions=self._successful_tool_actions(state),
+        )
         if decision.outcome is PolicyOutcome.BLOCK:
             event = self._new_event(
                 state,
@@ -670,7 +674,12 @@ class HarnessLoop:
     def _policy_check(self, state: DiagnosisState) -> dict[str, Any]:
         """在任何工具执行前完成策略检查和预算消费。"""
         action = self._require_current_action(state)
-        decision = self._policy.evaluate(action, state["budget"])
+        decision = self._policy.evaluate(
+            action,
+            state["budget"],
+            # 只传入成功工具调用，避免阻断工具失败后的自动重试。
+            previous_successful_tool_actions=self._successful_tool_actions(state),
+        )
 
         if decision.outcome is PolicyOutcome.ALLOW:
             # 只有允许执行的动作才写入新的预算状态。
@@ -1138,6 +1147,17 @@ class HarnessLoop:
 
         # 旧 Provider 只返回 AgentAction 时，默认没有供应商用量。
         return ModelInvocation(action=response, usage=ModelUsage())
+
+    @staticmethod
+    def _successful_tool_actions(state: DiagnosisState) -> tuple[AgentAction, ...]:
+        """从轨迹提取已成功完成的工具动作，供 Policy 检查重复调用。"""
+        return tuple(
+            event.action
+            for event in state["trajectory"]
+            if event.event_type is EventType.TOOL_FINISHED
+            and event.action is not None
+            and event.action.action_type is ActionType.CALL_TOOL
+        )
 
     @staticmethod
     def _new_event(

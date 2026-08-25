@@ -132,3 +132,50 @@ def test_legacy_tool_policy_without_schema_keeps_accepting_arguments() -> None:
     decision = policy.evaluate(tool_action("query_metrics", unregistered="value"), make_budget())
 
     assert decision.outcome is PolicyOutcome.ALLOW
+
+
+def test_duplicate_successful_tool_call_is_blocked() -> None:
+    """相同工具与参数已经成功执行时，策略层必须阻断重复调用。"""
+    action = tool_action("query_metrics", service="payment")
+    policy = ActionPolicy([ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)])
+
+    decision = policy.evaluate(
+        action,
+        make_budget(),
+        previous_successful_tool_actions=[action],
+    )
+
+    assert decision.outcome is PolicyOutcome.BLOCK
+    assert decision.reason == "同一工具及参数已成功执行，拒绝重复调用。"
+    assert decision.violations == ("tool:duplicate_call",)
+
+
+def test_same_tool_with_different_arguments_is_allowed() -> None:
+    """同一工具使用不同参数时仍可收集新的诊断证据。"""
+    policy = ActionPolicy([ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)])
+    previous_action = tool_action("query_metrics", service="payment")
+
+    decision = policy.evaluate(
+        tool_action("query_metrics", service="order"),
+        make_budget(),
+        previous_successful_tool_actions=[previous_action],
+    )
+
+    assert decision.outcome is PolicyOutcome.ALLOW
+
+
+def test_repeat_limit_can_allow_multiple_identical_calls() -> None:
+    """受控场景可以显式提高同一调用的成功次数上限。"""
+    action = tool_action("query_metrics", service="payment")
+    policy = ActionPolicy(
+        [ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)],
+        max_identical_tool_calls=2,
+    )
+
+    decision = policy.evaluate(
+        action,
+        make_budget(),
+        previous_successful_tool_actions=[action],
+    )
+
+    assert decision.outcome is PolicyOutcome.ALLOW

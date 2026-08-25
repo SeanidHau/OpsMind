@@ -109,11 +109,15 @@ def make_state() -> dict[str, Any]:
 
 
 def make_loop(provider: QueueActionProvider, executor: RepeatingToolExecutor) -> HarnessLoop:
-    """构造带低风险工具和默认一次纠正机会的 Harness。"""
+    """构造用于验证执行后停滞与 Replan 协议的 Harness。"""
     return HarnessLoop(
         action_provider=provider,
         tool_executor=executor,
-        policy=ActionPolicy([ToolPolicy(name=TOOL_NAME, risk_level=ToolRiskLevel.LOW)]),
+        policy=ActionPolicy(
+            [ToolPolicy(name=TOOL_NAME, risk_level=ToolRiskLevel.LOW)],
+            # 此夹具验证执行后的重复观察，因此允许三次相同调用进入 Verifier。
+            max_identical_tool_calls=3,
+        ),
     )
 
 

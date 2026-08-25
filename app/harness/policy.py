@@ -19,14 +19,26 @@ from app.models.contracts import (
 class ActionPolicy:
     """基于工具注册表、风险等级和预算决定动作是否可执行。"""
 
-    def __init__(self, tool_policies: Iterable[ToolPolicy]) -> None:
-        """将工具策略转换为按名称查询的只读注册表。"""
+    def __init__(
+        self,
+        tool_policies: Iterable[ToolPolicy],
+        *,
+        max_identical_tool_calls: int = 1,
+    ) -> None:
+        """初始化工具策略，并配置同一工具参数组合的成功调用上限。"""
+        if max_identical_tool_calls < 1:
+            raise ValueError("max_identical_tool_calls must be at least 1")
+
         self._tool_policies = {tool_policy.name: tool_policy for tool_policy in tool_policies}
+        # 默认只允许同一工具和参数成功执行一次。
+        self._max_identical_tool_calls = max_identical_tool_calls
 
     def evaluate(
         self,
         action: AgentAction,
         budget: BudgetState,
+        *,
+        previous_successful_tool_actions: Iterable[AgentAction] = (),
     ) -> PolicyDecision:
         """评估候选动作，但绝不直接修改预算状态。"""
         consumption = BudgetConsumption(
@@ -53,6 +65,18 @@ class ActionPolicy:
                     reason="工具参数不符合注册定义。",
                     consumption=consumption,
                     violations=argument_violations,
+                )
+
+            # 只统计成功调用，工具失败后的自动重试不经过此策略检查。
+            if self._has_reached_repeat_limit(
+                action,
+                previous_successful_tool_actions,
+            ):
+                return PolicyDecision(
+                    outcome=PolicyOutcome.BLOCK,
+                    reason="同一工具及参数已成功执行，拒绝重复调用。",
+                    consumption=consumption,
+                    violations=("tool:duplicate_call",),
                 )
 
         # 预算不足时，不应该进入审批或实际执行流程
@@ -100,3 +124,18 @@ class ActionPolicy:
             *(f"tool:missing_arg:{name}" for name in missing_args),
             *(f"tool:unexpected_arg:{name}" for name in unexpected_args),
         )
+
+    def _has_reached_repeat_limit(
+        self,
+        action: AgentAction,
+        previous_successful_tool_actions: Iterable[AgentAction],
+    ) -> bool:
+        """统计相同工具和参数的历史成功调用次数。"""
+        identical_call_count = sum(
+            1
+            for previous_action in previous_successful_tool_actions
+            if previous_action.action_type is ActionType.CALL_TOOL
+            and previous_action.tool_name == action.tool_name
+            and previous_action.tool_args == action.tool_args
+        )
+        return identical_call_count >= self._max_identical_tool_calls

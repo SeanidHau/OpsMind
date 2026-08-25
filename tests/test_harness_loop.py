@@ -65,12 +65,13 @@ def make_budget(
     )
 
 
-def tool_action(name: str) -> AgentAction:
+def tool_action(name: str, **tool_args: object) -> AgentAction:
     """构造一个由 Loop 处理的工具调用动作。"""
     return AgentAction(
         action_type=ActionType.CALL_TOOL,
         intent=f"调用 {name}",
         tool_name=name,
+        tool_args=tool_args,
         reason="收集故障诊断证据",
     )
 
@@ -215,7 +216,11 @@ async def test_loop_stops_after_three_repeated_observations() -> None:
     loop = HarnessLoop(
         action_provider=QueueActionProvider([tool_action("query_metrics")] * 4),
         tool_executor=executor,
-        policy=ActionPolicy([ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)]),
+        policy=ActionPolicy(
+            [ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)],
+            # 此用例专门验证执行后的停滞逻辑，因此放宽前置重复调用上限。
+            max_identical_tool_calls=4,
+        ),
         # 本用例验证第三次停滞的强制停止，不触发第 30 阶段的两次停滞 Replan 协议。
         progress_verifier=ProgressVerifier(replan_after_stalls=3, stop_after_stalls=3),
     )
@@ -229,3 +234,24 @@ async def test_loop_stops_after_three_repeated_observations() -> None:
     assert len(executor.actions) == 4
     assert result["trajectory"][-2].event_type is EventType.VERIFICATION_FAILED
     assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
+
+
+@pytest.mark.asyncio
+async def test_loop_blocks_duplicate_tool_call_before_execution() -> None:
+    """第二次相同调用不能再次执行工具或消耗工具预算。"""
+    executor = RecordingToolExecutor()
+    repeated_action = tool_action("query_metrics", service="payment")
+    loop = HarnessLoop(
+        action_provider=QueueActionProvider([repeated_action, repeated_action]),
+        tool_executor=executor,
+        policy=ActionPolicy([ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)]),
+    )
+
+    result = await loop.run(make_state(budget=make_budget()))
+
+    assert result["terminal_status"] is HarnessStatus.BLOCKED
+    assert [action.tool_name for action in executor.actions] == ["query_metrics"]
+    assert result["budget"].used_tool_calls == 1
+    assert result["tool_call_count"] == 1
+    assert result["errors"][-1] == "同一工具及参数已成功执行，拒绝重复调用。"
+    assert result["trajectory"][-2].event_type is EventType.ACTION_BLOCKED
