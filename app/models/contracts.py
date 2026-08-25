@@ -168,6 +168,28 @@ class ToolPolicy(BaseModel):
     risk_level: ToolRiskLevel
     read_only: bool = False
     requires_approval: bool = False
+    # None 表示旧调用方未提供参数 schema，保持既有策略行为。
+    # 空元组表示 schema 已声明，且该工具不接受任何参数。
+    required_args: tuple[str, ...] = ()
+    allowed_args: tuple[str, ...] | None = None
+
+    @model_validator(mode="after")
+    def validate_argument_schema(self) -> Self:
+        """保证已声明的参数 schema 自洽。"""
+        if self.allowed_args is None:
+            return self
+
+        if len(set(self.required_args)) != len(self.required_args):
+            raise ValueError("required_args must not contain duplicates")
+        if len(set(self.allowed_args)) != len(self.allowed_args):
+            raise ValueError("allowed_args must not contain duplicates")
+
+        missing_allowed_args = set(self.required_args) - set(self.allowed_args)
+        if missing_allowed_args:
+            name = ", ".join(sorted(missing_allowed_args))
+            raise ValueError(f"required_args must be included in allowed_args: {name}")
+
+        return self
 
 
 class ToolDefinition(BaseModel):

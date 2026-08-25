@@ -74,6 +74,8 @@ async def test_registry_executes_registered_tool_and_exposes_policy() -> None:
     assert received_args == [{"service": "payment"}]
     assert registry.policies()[0].name == "query_metrics"
     assert registry.policies()[0].risk_level is ToolRiskLevel.LOW
+    assert registry.policies()[0].required_args == ("service",)
+    assert registry.policies()[0].allowed_args == ("service", "window_minutes")
 
 
 @pytest.mark.asyncio
@@ -162,3 +164,45 @@ async def test_registry_executes_through_harness_loop() -> None:
         "service": "payment",
         "error_rate": 0.12,
     }
+
+
+@pytest.mark.asyncio
+async def test_harness_blocks_invalid_arguments_before_tool_execution() -> None:
+    """Harness 应在调用处理函数和扣减工具预算前阻断无效参数。"""
+    called = False
+
+    async def query_metrics(args: dict[str, Any]) -> dict[str, Any]:
+        """参数前置校验失效时，此标志会暴露越过策略层的调用。"""
+        nonlocal called
+        called = True
+        return args
+
+    registry = ToolRegistry()
+    registry.register(metrics_definition(), query_metrics)
+    loop = HarnessLoop(
+        action_provider=QueueActionProvider([tool_action(region="cn")]),
+        tool_executor=registry,
+        policy=ActionPolicy(registry.policies()),
+    )
+    state = create_initial_state(
+        session_id="session-argument-block",
+        thread_id="thread-argument-block",
+        user_query="支付服务超时",
+        budget=BudgetState(
+            max_steps=5,
+            max_tool_calls=3,
+            max_model_calls=3,
+            max_tokens=1_000,
+            max_runtime_seconds=60,
+            max_estimated_cost_usd=1.0,
+        ),
+    )
+
+    result = await loop.run(state)
+
+    assert result["terminal_status"] is HarnessStatus.BLOCKED
+    assert result["budget"].used_tool_calls == 0
+    assert result["tool_call_count"] == 0
+    assert result["trajectory"][-2].event_type.value == "action_blocked"
+    assert result["trajectory"][-2].decision == "工具参数不符合注册定义。"
+    assert called is False

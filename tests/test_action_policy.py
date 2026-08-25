@@ -24,12 +24,13 @@ def make_budget(*, used_tool_calls: int = 0) -> BudgetState:
     )
 
 
-def tool_action(name: str) -> AgentAction:
+def tool_action(name: str, **tool_args: object) -> AgentAction:
     """构造请求调用指定工具的模型动作。"""
     return AgentAction(
         action_type=ActionType.CALL_TOOL,
         intent=f"调用 {name}",
         tool_name=name,
+        tool_args=tool_args,
         reason="收集下一步诊断证据",
     )
 
@@ -81,3 +82,53 @@ def test_exhausted_tool_call_budget_blocks_registered_tool() -> None:
 
     assert decision.outcome is PolicyOutcome.BLOCK
     assert decision.violations == ("tool_calls",)
+
+
+def test_missing_required_argument_is_blocked_before_budget_check() -> None:
+    """参数缺失时，策略层应在预算检查前直接阻断动作。"""
+    policy = ActionPolicy(
+        [
+            ToolPolicy(
+                name="query_metrics",
+                risk_level=ToolRiskLevel.LOW,
+                required_args=("service",),
+                allowed_args=("service", "window_minutes"),
+            )
+        ]
+    )
+
+    decision = policy.evaluate(tool_action("query_metrics"), make_budget(used_tool_calls=1))
+
+    assert decision.outcome is PolicyOutcome.BLOCK
+    assert decision.reason == "工具参数不符合注册定义。"
+    assert decision.violations == ("tool:missing_arg:service",)
+
+
+def test_unexpected_argument_is_blocked_before_risk_approval() -> None:
+    """未声明参数不能通过高风险工具的审批分支。"""
+    policy = ActionPolicy(
+        [
+            ToolPolicy(
+                name="generate_restart_plan",
+                risk_level=ToolRiskLevel.HIGH,
+                allowed_args=("service",),
+            )
+        ]
+    )
+
+    decision = policy.evaluate(
+        tool_action("generate_restart_plan", service="payment", region="cn"),
+        make_budget(),
+    )
+
+    assert decision.outcome is PolicyOutcome.BLOCK
+    assert decision.violations == ("tool:unexpected_arg:region",)
+
+
+def test_legacy_tool_policy_without_schema_keeps_accepting_arguments() -> None:
+    """未声明 schema 的手工 ToolPolicy 必须保持向后兼容。"""
+    policy = ActionPolicy([ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)])
+
+    decision = policy.evaluate(tool_action("query_metrics", unregistered="value"), make_budget())
+
+    assert decision.outcome is PolicyOutcome.ALLOW

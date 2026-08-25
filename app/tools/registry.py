@@ -42,6 +42,8 @@ class ToolRegistry:
             ToolPolicy(
                 name=definition.name,
                 risk_level=definition.risk_level,
+                required_args=definition.required_args,
+                allowed_args=definition.allowed_args,
             )
             for definition, _ in self._tools.values()
         )

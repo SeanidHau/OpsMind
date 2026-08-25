@@ -1,6 +1,7 @@
 """模型动作的预执行策略校验。"""
 
 from collections.abc import Iterable
+from typing import Any
 
 from app.harness.budget import BudgetManager
 from app.models.contracts import (
@@ -45,6 +46,15 @@ class ActionPolicy:
                     violations=("tool:not_registered",),
                 )
 
+            argument_violations = self._validate_tool_args(tool_policy, action.tool_args)
+            if argument_violations:
+                return PolicyDecision(
+                    outcome=PolicyOutcome.BLOCK,
+                    reason="工具参数不符合注册定义。",
+                    consumption=consumption,
+                    violations=argument_violations,
+                )
+
         # 预算不足时，不应该进入审批或实际执行流程
         exceeded = BudgetManager.exceeded_dimensions(budget, consumption)
         if exceeded:
@@ -71,4 +81,22 @@ class ActionPolicy:
             outcome=PolicyOutcome.ALLOW,
             reason="动作满足当前工具策略与预算约束。",
             consumption=consumption,
+        )
+
+    @staticmethod
+    def _validate_tool_args(
+        tool_policy: ToolPolicy,
+        tool_args: dict[str, Any],
+    ) -> tuple[str, ...]:
+        """根据注册表投影的 schema 校验工具参数。"""
+        if tool_policy.allowed_args is None:
+            return ()
+
+        argument_names = set(tool_args)
+        missing_args = sorted(set(tool_policy.required_args) - argument_names)
+        unexpected_args = sorted(argument_names - set(tool_policy.allowed_args))
+
+        return (
+            *(f"tool:missing_arg:{name}" for name in missing_args),
+            *(f"tool:unexpected_arg:{name}" for name in unexpected_args),
         )
