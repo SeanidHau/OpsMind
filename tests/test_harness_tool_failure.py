@@ -265,3 +265,30 @@ async def test_loop_replans_after_transient_failure_retries_are_exhausted() -> N
         "category": "transient_transport_error",
         "retryable": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_loop_blocks_tool_failure_fallback_after_replan_limit() -> None:
+    """工具降级入口必须遵守已用尽的重规划预算。"""
+    provider = QueueActionProvider([tool_action()])
+    executor = OutcomeToolExecutor(
+        [ConnectionError("network down"), ConnectionError("network down")]
+    )
+    loop = HarnessLoop(
+        action_provider=provider,
+        tool_executor=executor,
+        policy=ActionPolicy([ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)]),
+        max_tool_retries=1,
+        max_replans=1,
+        replan_on_tool_failure=True,
+    )
+    state = make_state()
+    state["replan_count"] = 1
+
+    result = await loop.run(state)  # type: ignore[arg-type]
+
+    assert result["terminal_status"] is HarnessStatus.BLOCKED
+    assert provider.calls == 1
+    assert executor.calls == 2
+    assert result["errors"][-1] == "本次运行已达到重新规划上限。"
+    assert result["trajectory"][-2].event_type is EventType.ACTION_BLOCKED

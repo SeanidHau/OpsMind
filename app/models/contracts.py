@@ -708,6 +708,7 @@ class DiagnosisState(TypedDict):
     replan_reason: NotRequired[str | None]
     replan_feedback: NotRequired[str | None]
     replan_correction_count: NotRequired[int]
+    replan_count: NotRequired[int]
     approval_resolution: NotRequired[ApprovalResolution | None]
     # ask_user 暂停时保存待回答的问题；恢复后清空。
     pending_question: NotRequired[str | None]

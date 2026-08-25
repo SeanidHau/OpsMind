@@ -165,6 +165,7 @@ async def test_harness_preserves_versions_when_plan_is_revised() -> None:
     assert result["plan_history"][0].items == first_items
     assert result["plan"] == revised_items
     assert result["replan_requested"] is False
+    assert result["replan_count"] == 1
     assert EventType.PLAN_REVISED in [event.event_type for event in result["trajectory"]]
 
 
@@ -188,3 +189,38 @@ async def test_harness_blocks_model_plan_with_unknown_dependency() -> None:
     assert executor.actions == []
     assert result["trajectory"][-2].event_type is EventType.ACTION_BLOCKED
     assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
+
+
+@pytest.mark.asyncio
+async def test_harness_blocks_plan_revisions_after_replan_limit() -> None:
+    """初始计划不计入，达到重规划上限后不得继续修改计划。"""
+    provider = QueueActionProvider(
+        [
+            plan_action(
+                items=[PlanItem(title="初始计划", rationale="建立第一条诊断路径。")],
+                reason="建立初始计划。",
+            ),
+            plan_action(
+                items=[PlanItem(title="第一次修订", rationale="根据新线索调整路径。")],
+                reason="应用第一条新线索。",
+            ),
+            plan_action(
+                items=[PlanItem(title="第二次修订", rationale="尝试再次调整路径。")],
+                reason="尝试第二次修订。",
+            ),
+        ]
+    )
+    loop = HarnessLoop(
+        action_provider=provider,
+        tool_executor=FixedToolExecutor(),
+        policy=ActionPolicy([ToolPolicy(name=TOOL_NAME, risk_level=ToolRiskLevel.LOW)]),
+        max_replans=1,
+    )
+
+    result = await loop.run(make_state())  # type: ignore[arg-type]
+
+    assert result["terminal_status"] is HarnessStatus.BLOCKED
+    assert result["plan_version"] == 2
+    assert result["replan_count"] == 1
+    assert result["errors"][-1] == "本次运行已达到重新规划上限。"
+    assert result["trajectory"][-2].event_type is EventType.ACTION_BLOCKED

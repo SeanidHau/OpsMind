@@ -7,6 +7,7 @@ import pytest
 
 from app.harness.loop import HarnessLoop, create_initial_state
 from app.harness.policy import ActionPolicy
+from app.harness.progress import ProgressVerifier
 from app.models.contracts import (
     ActionType,
     AgentAction,
@@ -192,6 +193,34 @@ async def test_harness_blocks_after_replan_correction_limit() -> None:
     assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
 
 
+@pytest.mark.asyncio
+async def test_harness_prioritizes_replan_budget_over_stall_termination() -> None:
+    """停滞与预算同时触发时，Harness 必须保留预算阻断原因。"""
+    action = tool_action()
+    state = make_state()
+    state["progress_fingerprints"] = [
+        ProgressVerifier._fingerprint(  # noqa: SLF001 - 固定与 Verifier 一致的重复观察。
+            action,
+            {"tool_name": TOOL_NAME, "result": TOOL_OBSERVATION},
+        )
+    ]
+    loop = HarnessLoop(
+        action_provider=QueueActionProvider([action]),
+        tool_executor=RepeatingToolExecutor(),
+        policy=ActionPolicy(
+            [ToolPolicy(name=TOOL_NAME, risk_level=ToolRiskLevel.LOW)],
+        ),
+        progress_verifier=ProgressVerifier(replan_after_stalls=1, stop_after_stalls=1),
+        max_replans=0,
+    )
+
+    result = await loop.run(state)  # type: ignore[arg-type]
+
+    assert result["terminal_status"] is HarnessStatus.BLOCKED
+    assert result["errors"][-1] == "本次运行已达到重新规划上限。"
+    assert result["trajectory"][-2].event_type is EventType.ACTION_BLOCKED
+
+
 def test_harness_rejects_negative_replan_correction_limit() -> None:
     """纠正次数上限必须在 Harness 初始化时校验。"""
     with pytest.raises(ValueError, match="max_replan_corrections"):
@@ -200,4 +229,12 @@ def test_harness_rejects_negative_replan_correction_limit() -> None:
             tool_executor=RepeatingToolExecutor(),
             policy=ActionPolicy([]),
             max_replan_corrections=-1,
+        )
+
+    with pytest.raises(ValueError, match="max_replans"):
+        HarnessLoop(
+            action_provider=QueueActionProvider([]),
+            tool_executor=RepeatingToolExecutor(),
+            policy=ActionPolicy([]),
+            max_replans=-1,
         )

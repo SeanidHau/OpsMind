@@ -95,6 +95,7 @@ def create_initial_state(
         "replan_reason": None,
         "replan_feedback": None,
         "replan_correction_count": 0,
+        "replan_count": 0,
         "context_refs": [],
         "budget": budget,
         "trajectory": [],
@@ -141,6 +142,7 @@ class HarnessLoop:
         report_renderer: MarkdownReportRenderer | None = None,
         run_archive: RunArchive | None = None,
         max_replan_corrections: int = 1,
+        max_replans: int = 2,
         max_user_questions: int = 2,
         replan_on_tool_failure: bool = False,
     ) -> None:
@@ -154,6 +156,8 @@ class HarnessLoop:
 
         if max_replan_corrections < 0:
             raise ValueError("max_replan_corrections must not be negative")
+        if max_replans < 0:
+            raise ValueError("max_replans must not be negative")
         if max_user_questions < 0:
             raise ValueError("max_user_questions must not be negative")
 
@@ -166,6 +170,7 @@ class HarnessLoop:
         self._max_tool_retries = max_tool_retries
         self._max_model_retries = max_model_retries
         self._max_replan_corrections = max_replan_corrections
+        self._max_replans = max_replans
         self._max_user_questions = max_user_questions
         self._replan_on_tool_failure = replan_on_tool_failure
         self._model_retry_delay_seconds = model_retry_delay_seconds
@@ -671,6 +676,22 @@ class HarnessLoop:
         if action.action_type is not ActionType.UPDATE_PLAN:
             raise RuntimeError("apply_plan only accepts update_plan actions")
 
+        is_replan = self._is_replan_action(state)
+        if is_replan and self._replan_limit_reached(state):
+            block_reason = "本次运行已达到重新规划上限。"
+            event = self._new_event(
+                state,
+                event_type=EventType.ACTION_BLOCKED,
+                node="apply_plan",
+                action=action,
+                decision=block_reason,
+            )
+            return {
+                "terminal_status": HarnessStatus.BLOCKED,
+                "errors": [*state["errors"], block_reason],
+                "trajectory": [*state["trajectory"], event],
+            }
+
         next_version = state["plan_version"] + 1
         try:
             revision = self._plan_manager.create_revision(
@@ -714,6 +735,7 @@ class HarnessLoop:
             "replan_reason": None,
             "replan_feedback": None,
             "replan_correction_count": 0,
+            "replan_count": state.get("replan_count", 0) + int(is_replan),
             "trajectory": [*state["trajectory"], event],
         }
 
@@ -1027,6 +1049,26 @@ class HarnessLoop:
                 }
 
             if self._replan_on_tool_failure and failure.fallback_eligible:
+                if self._replan_limit_reached(state):
+                    block_reason = "本次运行已达到重新规划上限。"
+                    blocked_event = self._new_event(
+                        state,
+                        event_type=EventType.ACTION_BLOCKED,
+                        node="execute_tool",
+                        action=action,
+                        observation=failure_observation,
+                        decision=block_reason,
+                        error=failure.message,
+                        latency_ms=tool_latency_ms,
+                    )
+                    return {
+                        "terminal_status": HarnessStatus.BLOCKED,
+                        "retry_count": retry_count,
+                        "tool_call_count": attempted_tool_calls,
+                        "errors": [*state["errors"], block_reason],
+                        "trajectory": [*state["trajectory"], started_event, blocked_event],
+                    }
+
                 replan_reason = "工具调用在重试耗尽后失败，需要重新规划替代诊断路径。"
                 fallback_event = self._new_event(
                     state,
@@ -1152,17 +1194,34 @@ class HarnessLoop:
 
         # 第二次连续停滞只发出重规划信号，保留后续动作机会
         if assessment.should_replan:
-            updates.update(
-                {
-                    "replan_requested": True,
-                    "replan_reason": assessment.reason,
-                    "replan_feedback": None,
-                    "replan_correction_count": 0,
-                }
-            )
+            if self._replan_limit_reached(state):
+                block_reason = "本次运行已达到重新规划上限。"
+                event = self._new_event(
+                    state,
+                    event_type=EventType.ACTION_BLOCKED,
+                    node="verify_progress",
+                    action=action,
+                    decision=block_reason,
+                )
+                updates.update(
+                    {
+                        "terminal_status": HarnessStatus.BLOCKED,
+                        "errors": [*state["errors"], block_reason],
+                        "trajectory": [*state["trajectory"], event],
+                    }
+                )
+            else:
+                updates.update(
+                    {
+                        "replan_requested": True,
+                        "replan_reason": assessment.reason,
+                        "replan_feedback": None,
+                        "replan_correction_count": 0,
+                    }
+                )
 
-        # 第三次连续停滞才真正结束 LangGraph
-        if assessment.should_stop:
+        # 重规划预算先于停滞终止生效，保留更具体的阻断原因和审计事件。
+        if assessment.should_stop and updates.get("terminal_status") is None:
             event = self._new_event(
                 state,
                 event_type=EventType.VERIFICATION_FAILED,
@@ -1347,10 +1406,8 @@ class HarnessLoop:
 
     @staticmethod
     def _route_after_verification(state: DiagnosisState) -> str:
-        """连续停滞达到上限后结束，否则重建上下文并继续。"""
-        if state.get("terminal_status") is HarnessStatus.STALLED:
-            return "finish"
-        return "build_context"
+        """验证节点已终止时结束，否则重建上下文并继续。"""
+        return "finish" if state.get("terminal_status") is not None else "build_context"
 
     @staticmethod
     def _require_current_action(state: DiagnosisState) -> AgentAction:
@@ -1406,6 +1463,15 @@ class HarnessLoop:
             return {}
 
         return {"plan": self._plan_manager.complete_item(state["plan"], action.plan_item_id)}
+
+    @staticmethod
+    def _is_replan_action(state: DiagnosisState) -> bool:
+        """判断当前计划提交是否属于初始计划后的重新规划。"""
+        return state.get("replan_requested", False) or state["plan_version"] > 0
+
+    def _replan_limit_reached(self, state: DiagnosisState) -> bool:
+        """检查已完成的重新规划次数是否达到本次运行上限。"""
+        return state.get("replan_count", 0) >= self._max_replans
 
     def _ensure_plan_tool_attempt_capacity(
         self,

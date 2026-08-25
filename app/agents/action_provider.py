@@ -96,6 +96,7 @@ class LangChainActionProvider:
             "replan_reason": state.get("replan_reason"),
             "replan_feedback": state.get("replan_feedback"),
             "replan_correction_count": state.get("replan_correction_count", 0),
+            "replan_count": state.get("replan_count", 0),
             "question_count": state.get("question_count", 0),
         }
         messages: list[BaseMessage] = [
