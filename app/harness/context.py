@@ -94,7 +94,9 @@ class ContextManager:
             ContextItem(
                 source=ContextSource.PLAN,
                 reference=f"plan:{item.id}",
-                content=f"{item.status}: {item.title}",
+                content=(
+                    f"{item.status}: {item.title}; max_tool_attempts={item.max_tool_attempts}"
+                ),
                 priority=90,
             )
             for item in state["plan"]

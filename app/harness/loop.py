@@ -843,7 +843,16 @@ class HarnessLoop:
         if action.plan_item_id is None:
             return None
 
-        return self._plan_manager.start_item(state["plan"], action.plan_item_id)
+        previous_tool_attempts = (
+            self._attempted_tool_actions(state)
+            if action.action_type is ActionType.CALL_TOOL
+            else ()
+        )
+        return self._plan_manager.start_item(
+            state["plan"],
+            action.plan_item_id,
+            previous_tool_attempts=previous_tool_attempts,
+        )
 
     def _ask_user(self, state: DiagnosisState) -> dict[str, Any]:
         """保存问题并暂停运行，等待外部调用 resume_with_user_input。"""
@@ -913,6 +922,31 @@ class HarnessLoop:
                 }
 
             if retry_count <= self._max_tool_retries:
+                try:
+                    self._ensure_plan_tool_attempt_capacity(state, action)
+                except ValueError as error:
+                    block_reason = str(error)
+                    blocked_event = self._new_event(
+                        state,
+                        event_type=EventType.ACTION_BLOCKED,
+                        node="execute_tool",
+                        action=action,
+                        observation={
+                            **failure_observation,
+                            "violations": ("plan:tool_attempt_limit",),
+                        },
+                        decision=block_reason,
+                        error=failure.message,
+                        latency_ms=tool_latency_ms,
+                    )
+                    return {
+                        "terminal_status": HarnessStatus.BLOCKED,
+                        "retry_count": retry_count,
+                        "tool_call_count": attempted_tool_calls,
+                        "errors": [*state["errors"], block_reason],
+                        "trajectory": [*state["trajectory"], started_event, blocked_event],
+                    }
+
                 # 当前失败调用已经实际发生，重试前先检查单工具调用上限。
                 attempted_actions = (*self._attempted_tool_actions(state), action)
                 tool_limit_violations = self._policy.tool_attempt_limit_violations(
@@ -1344,6 +1378,22 @@ class HarnessLoop:
             return {}
 
         return {"plan": self._plan_manager.complete_item(state["plan"], action.plan_item_id)}
+
+    def _ensure_plan_tool_attempt_capacity(
+        self,
+        state: DiagnosisState,
+        action: AgentAction,
+    ) -> None:
+        """将当前失败尝试纳入计划项计数，再决定能否重试。"""
+        if action.plan_item_id is None:
+            return
+
+        attempted_actions = (*self._attempted_tool_actions(state), action)
+        self._plan_manager.ensure_tool_attempt_capacity(
+            state["plan"],
+            action.plan_item_id,
+            attempted_actions,
+        )
 
     @staticmethod
     def _attempted_tool_actions(state: DiagnosisState) -> tuple[AgentAction, ...]:

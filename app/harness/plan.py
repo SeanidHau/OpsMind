@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.models.contracts import PlanItem, PlanRevision, PlanStatus
+from app.models.contracts import ActionType, AgentAction, PlanItem, PlanRevision, PlanStatus
 
 
 class PlanManager:
@@ -27,9 +27,39 @@ class PlanManager:
         )
 
     @classmethod
-    def start_item(cls, items: list[PlanItem], item_id: UUID) -> list[PlanItem]:
+    def start_item(
+        cls,
+        items: list[PlanItem],
+        item_id: UUID,
+        *,
+        previous_tool_attempts: tuple[AgentAction, ...] = (),
+    ) -> list[PlanItem]:
         """校验依赖后，将待执行计划项转为 in_progress。"""
+        cls.ensure_tool_attempt_capacity(items, item_id, previous_tool_attempts)
         return cls._transition_item(items, item_id, PlanStatus.IN_PROGRESS)
+
+    @classmethod
+    def ensure_tool_attempt_capacity(
+        cls,
+        items: list[PlanItem],
+        item_id: UUID,
+        previous_tool_attempts: tuple[AgentAction, ...],
+    ) -> None:
+        """检查绑定计划项是否仍可开始下一次真实工具尝试。"""
+        cls._validate_items(items)
+        item = next((current for current in items if current.id == item_id), None)
+        if item is None:
+            raise ValueError("action references an unknown plan item")
+        if item.max_tool_attempts is None:
+            return
+
+        attempt_count = sum(
+            1
+            for action in previous_tool_attempts
+            if action.action_type is ActionType.CALL_TOOL and action.plan_item_id == item_id
+        )
+        if attempt_count >= item.max_tool_attempts:
+            raise ValueError("plan item tool attempt limit is reached")
 
     @classmethod
     def complete_item(cls, items: list[PlanItem], item_id: UUID) -> list[PlanItem]:

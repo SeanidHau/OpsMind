@@ -43,6 +43,19 @@ class FixedToolExecutor:
         return {"status": "ok", "tool_name": action.tool_name}
 
 
+class FailingToolExecutor:
+    """始终抛出临时错误，用于验证计划项预算对重试的约束。"""
+
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    async def execute(self, action: AgentAction) -> dict[str, Any]:
+        """记录调用并返回可重试的传输错误。"""
+        del action
+        self.attempts += 1
+        raise ConnectionError("temporary failure")
+
+
 def make_state() -> dict[str, Any]:
     """构造可执行计划、工具和最终报告的状态。"""
     return create_initial_state(
@@ -71,6 +84,25 @@ def test_plan_manager_requires_completed_dependencies_before_starting_item() -> 
 
     with pytest.raises(ValueError, match="dependencies are not completed"):
         PlanManager.start_item([prerequisite, dependent], dependent.id)
+
+
+def test_plan_manager_blocks_when_tool_attempt_limit_is_reached() -> None:
+    """同一计划项达到工具尝试上限后不得继续执行。"""
+    item = PlanItem(
+        title="查询指标",
+        rationale="收集性能证据。",
+        max_tool_attempts=1,
+    )
+    action = AgentAction(
+        action_type=ActionType.CALL_TOOL,
+        intent="查询支付服务指标",
+        tool_name="query_metrics",
+        plan_item_id=item.id,
+        reason="执行计划项。",
+    )
+
+    with pytest.raises(ValueError, match="tool attempt limit"):
+        PlanManager.ensure_tool_attempt_capacity([item], item.id, (action,))
 
 
 @pytest.mark.asyncio
@@ -143,3 +175,35 @@ async def test_harness_blocks_bound_action_when_dependency_is_pending() -> None:
 
     assert result["terminal_status"] is HarnessStatus.BLOCKED
     assert result["errors"][-1] == "plan item dependencies are not completed"
+
+
+@pytest.mark.asyncio
+async def test_harness_blocks_retry_after_plan_item_attempt_limit() -> None:
+    """工具自动重试不能绕过绑定计划项的尝试上限。"""
+    item = PlanItem(
+        title="查询指标",
+        rationale="收集性能证据。",
+        max_tool_attempts=1,
+    )
+    action = AgentAction(
+        action_type=ActionType.CALL_TOOL,
+        intent="查询支付服务指标",
+        tool_name="query_metrics",
+        plan_item_id=item.id,
+        reason="执行计划项。",
+    )
+    executor = FailingToolExecutor()
+    loop = HarnessLoop(
+        action_provider=QueueActionProvider([action]),
+        tool_executor=executor,
+        policy=ActionPolicy([ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)]),
+        max_tool_retries=1,
+    )
+    state = make_state()
+    state["plan"] = [item]
+
+    result = await loop.run(state)  # type: ignore[arg-type]
+
+    assert result["terminal_status"] is HarnessStatus.BLOCKED
+    assert executor.attempts == 1
+    assert result["errors"][-1] == "plan item tool attempt limit is reached"

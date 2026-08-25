@@ -344,6 +344,8 @@ class PlanItem(BaseModel):
     rationale: str = Field(min_length=1, max_length=1_000)
     status: PlanStatus = PlanStatus.PENDING
     depends_on: list[UUID] = Field(default_factory=list)
+    # None 表示不限制本计划项关联工具的真实尝试次数。
+    max_tool_attempts: int | None = Field(default=None, gt=0)
     notes: str | None = None
 
 
