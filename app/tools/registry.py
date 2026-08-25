@@ -44,6 +44,8 @@ class ToolRegistry:
                 risk_level=definition.risk_level,
                 required_args=definition.required_args,
                 allowed_args=definition.allowed_args,
+                # 将工具定义中的单工具预算投影到策略层。
+                max_calls_per_run=definition.max_calls_per_run,
             )
             for definition, _ in self._tools.values()
         )

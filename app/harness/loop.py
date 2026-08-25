@@ -412,6 +412,7 @@ class HarnessLoop:
             action,
             state["budget"],
             previous_successful_tool_actions=self._successful_tool_actions(state),
+            previous_tool_attempts=self._attempted_tool_actions(state),
         )
         if decision.outcome is PolicyOutcome.BLOCK:
             event = self._new_event(
@@ -679,6 +680,8 @@ class HarnessLoop:
             state["budget"],
             # 只传入成功工具调用，避免阻断工具失败后的自动重试。
             previous_successful_tool_actions=self._successful_tool_actions(state),
+            # 包含成功和失败尝试，单工具上限不能被重试绕过。
+            previous_tool_attempts=self._attempted_tool_actions(state),
         )
 
         if decision.outcome is PolicyOutcome.ALLOW:
@@ -770,6 +773,35 @@ class HarnessLoop:
                 }
 
             if retry_count <= self._max_tool_retries:
+                # 当前失败调用已经实际发生，重试前先检查单工具调用上限。
+                attempted_actions = (*self._attempted_tool_actions(state), action)
+                tool_limit_violations = self._policy.tool_attempt_limit_violations(
+                    action,
+                    attempted_actions,
+                )
+                if tool_limit_violations:
+                    block_reason = "该工具已达到本次运行的调用上限。"
+                    blocked_event = self._new_event(
+                        state,
+                        event_type=EventType.ACTION_BLOCKED,
+                        node="execute_tool",
+                        action=action,
+                        observation={
+                            **failure_observation,
+                            "violations": tool_limit_violations,
+                        },
+                        decision=block_reason,
+                        error=failure.message,
+                        latency_ms=tool_latency_ms,
+                    )
+                    return {
+                        "terminal_status": HarnessStatus.BLOCKED,
+                        "retry_count": retry_count,
+                        "tool_call_count": attempted_tool_calls,
+                        "errors": [*state["errors"], block_reason],
+                        "trajectory": [*state["trajectory"], started_event, blocked_event],
+                    }
+
                 # 重试不重新调用模型或策略，但每次真实工具尝试都消费预算。
                 retry_consumption = BudgetConsumption(tool_calls=1)
                 exceeded = BudgetManager.exceeded_dimensions(
@@ -1155,6 +1187,17 @@ class HarnessLoop:
             event.action
             for event in state["trajectory"]
             if event.event_type is EventType.TOOL_FINISHED
+            and event.action is not None
+            and event.action.action_type is ActionType.CALL_TOOL
+        )
+
+    @staticmethod
+    def _attempted_tool_actions(state: DiagnosisState) -> tuple[AgentAction, ...]:
+        """从轨迹提取所有真实工具尝试，成功和失败都会计入单工具预算。"""
+        return tuple(
+            event.action
+            for event in state["trajectory"]
+            if event.event_type is EventType.TOOL_STARTED
             and event.action is not None
             and event.action.action_type is ActionType.CALL_TOOL
         )

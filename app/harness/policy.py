@@ -39,6 +39,7 @@ class ActionPolicy:
         budget: BudgetState,
         *,
         previous_successful_tool_actions: Iterable[AgentAction] = (),
+        previous_tool_attempts: Iterable[AgentAction] = (),
     ) -> PolicyDecision:
         """评估候选动作，但绝不直接修改预算状态。"""
         consumption = BudgetConsumption(
@@ -77,6 +78,19 @@ class ActionPolicy:
                     reason="同一工具及参数已成功执行，拒绝重复调用。",
                     consumption=consumption,
                     violations=("tool:duplicate_call",),
+                )
+
+            tool_attempt_violations = self._tool_attempt_limit_violations(
+                tool_policy,
+                action,
+                previous_tool_attempts,
+            )
+            if tool_attempt_violations:
+                return PolicyDecision(
+                    outcome=PolicyOutcome.BLOCK,
+                    reason="该工具已达到本次运行的调用上限。",
+                    consumption=consumption,
+                    violations=tool_attempt_violations,
                 )
 
         # 预算不足时，不应该进入审批或实际执行流程
@@ -139,3 +153,40 @@ class ActionPolicy:
             and previous_action.tool_args == action.tool_args
         )
         return identical_call_count >= self._max_identical_tool_calls
+
+    def tool_attempt_limit_violations(
+        self,
+        action: AgentAction,
+        previous_tool_attempts: Iterable[AgentAction],
+    ) -> tuple[str, ...]:
+        """供工具重试路径检查单工具调用上限。"""
+        tool_policy = self._tool_policies.get(action.tool_name or "")
+        if tool_policy is None:
+            return ()
+
+        return self._tool_attempt_limit_violations(
+            tool_policy,
+            action,
+            previous_tool_attempts,
+        )
+
+    @staticmethod
+    def _tool_attempt_limit_violations(
+        tool_policy: ToolPolicy,
+        action: AgentAction,
+        previous_tool_attempts: Iterable[AgentAction],
+    ) -> tuple[str, ...]:
+        """检查当前工具的真实执行尝试次数是否达到上限。"""
+        if tool_policy.max_calls_per_run is None:
+            return ()
+
+        attempted_call_count = sum(
+            1
+            for previous_action in previous_tool_attempts
+            if previous_action.action_type is ActionType.CALL_TOOL
+            and previous_action.tool_name == action.tool_name
+        )
+        if attempted_call_count < tool_policy.max_calls_per_run:
+            return ()
+
+        return (f"tool:call_limit:{tool_policy.name}",)

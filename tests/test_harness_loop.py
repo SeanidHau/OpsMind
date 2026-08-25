@@ -255,3 +255,36 @@ async def test_loop_blocks_duplicate_tool_call_before_execution() -> None:
     assert result["tool_call_count"] == 1
     assert result["errors"][-1] == "同一工具及参数已成功执行，拒绝重复调用。"
     assert result["trajectory"][-2].event_type is EventType.ACTION_BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_loop_blocks_tool_after_its_call_limit_is_reached() -> None:
+    """同一工具即使参数不同，也不能超过配置的真实调用上限。"""
+    executor = RecordingToolExecutor()
+    loop = HarnessLoop(
+        action_provider=QueueActionProvider(
+            [
+                tool_action("query_metrics", service="payment"),
+                tool_action("query_metrics", service="order"),
+            ]
+        ),
+        tool_executor=executor,
+        policy=ActionPolicy(
+            [
+                ToolPolicy(
+                    name="query_metrics",
+                    risk_level=ToolRiskLevel.LOW,
+                    max_calls_per_run=1,
+                )
+            ]
+        ),
+    )
+
+    result = await loop.run(make_state(budget=make_budget()))
+
+    assert result["terminal_status"] is HarnessStatus.BLOCKED
+    assert [action.tool_name for action in executor.actions] == ["query_metrics"]
+    assert result["budget"].used_tool_calls == 1
+    assert result["tool_call_count"] == 1
+    assert result["errors"][-1] == "该工具已达到本次运行的调用上限。"
+    assert result["trajectory"][-2].event_type is EventType.ACTION_BLOCKED

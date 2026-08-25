@@ -96,12 +96,21 @@ def make_loop(
     executor: FlakyToolExecutor,
     *,
     max_tool_retries: int,
+    max_calls_per_run: int | None = None,
 ) -> HarnessLoop:
-    """构造注册了低风险只读工具的 Harness。"""
+    """构造带可选单工具调用上限的 Harness。"""
     return HarnessLoop(
         action_provider=provider,
         tool_executor=executor,
-        policy=ActionPolicy([ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)]),
+        policy=ActionPolicy(
+            [
+                ToolPolicy(
+                    name="query_metrics",
+                    risk_level=ToolRiskLevel.LOW,
+                    max_calls_per_run=max_calls_per_run,
+                )
+            ]
+        ),
         max_tool_retries=max_tool_retries,
     )
 
@@ -155,6 +164,27 @@ async def test_loop_blocks_retry_that_exceeds_tool_budget() -> None:
     assert result["budget"].used_tool_calls == 1
     assert result["trajectory"][-2].event_type is EventType.ACTION_BLOCKED
     assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
+
+
+@pytest.mark.asyncio
+async def test_loop_blocks_retry_after_single_tool_limit_is_reached() -> None:
+    """单工具上限必须同时约束第一次调用后的自动重试。"""
+    provider = QueueActionProvider([tool_action()])
+    executor = FlakyToolExecutor(failures_before_success=1)
+
+    result = await make_loop(
+        provider,
+        executor,
+        max_tool_retries=1,
+        max_calls_per_run=1,
+    ).run(make_state())
+
+    assert result["terminal_status"] is HarnessStatus.BLOCKED
+    assert executor.attempts == 1
+    assert result["tool_call_count"] == 1
+    assert result["budget"].used_tool_calls == 1
+    assert result["errors"][-1] == "该工具已达到本次运行的调用上限。"
+    assert result["trajectory"][-2].event_type is EventType.ACTION_BLOCKED
 
 
 def test_loop_rejects_negative_retry_limit() -> None:

@@ -41,6 +41,7 @@ def metrics_definition() -> ToolDefinition:
         risk_level=ToolRiskLevel.LOW,
         required_args=("service",),
         allowed_args=("service", "window_minutes"),
+        max_calls_per_run=2,
     )
 
 
@@ -76,6 +77,7 @@ async def test_registry_executes_registered_tool_and_exposes_policy() -> None:
     assert registry.policies()[0].risk_level is ToolRiskLevel.LOW
     assert registry.policies()[0].required_args == ("service",)
     assert registry.policies()[0].allowed_args == ("service", "window_minutes")
+    assert registry.policies()[0].max_calls_per_run == 2
 
 
 @pytest.mark.asyncio

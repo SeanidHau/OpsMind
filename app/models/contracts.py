@@ -172,6 +172,8 @@ class ToolPolicy(BaseModel):
     # 空元组表示 schema 已声明，且该工具不接受任何参数。
     required_args: tuple[str, ...] = ()
     allowed_args: tuple[str, ...] | None = None
+    # None 表示不设置单工具调用上限，保持现有行为。
+    max_calls_per_run: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_argument_schema(self) -> Self:
@@ -202,6 +204,8 @@ class ToolDefinition(BaseModel):
     risk_level: ToolRiskLevel
     required_args: tuple[str, ...] = ()
     allowed_args: tuple[str, ...] = ()
+    # 工具定义是单工具预算配置的唯一来源。
+    max_calls_per_run: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_argument_schema(self) -> Self:

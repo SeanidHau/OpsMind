@@ -179,3 +179,27 @@ def test_repeat_limit_can_allow_multiple_identical_calls() -> None:
     )
 
     assert decision.outcome is PolicyOutcome.ALLOW
+
+
+def test_tool_call_limit_blocks_same_tool_with_different_arguments() -> None:
+    """单工具调用上限按工具名统计，不依赖参数是否相同。"""
+    policy = ActionPolicy(
+        [
+            ToolPolicy(
+                name="query_metrics",
+                risk_level=ToolRiskLevel.LOW,
+                max_calls_per_run=1,
+            )
+        ]
+    )
+    previous_action = tool_action("query_metrics", service="payment")
+
+    decision = policy.evaluate(
+        tool_action("query_metrics", service="order"),
+        make_budget(),
+        previous_tool_attempts=[previous_action],
+    )
+
+    assert decision.outcome is PolicyOutcome.BLOCK
+    assert decision.reason == "该工具已达到本次运行的调用上限。"
+    assert decision.violations == ("tool:call_limit:query_metrics",)
