@@ -4,17 +4,25 @@ from fastapi import FastAPI
 
 from app.api.routers.system import router as system_router
 from app.api.version import API_VERSION
+from app.config import AppEnvironment, Settings, get_settings
 
 
-def create_app() -> FastAPI:
-    """创建独立的应用实例，便于测试和未来注入基础设施依赖。"""
+def create_app(*, settings: Settings | None = None) -> FastAPI:
+    """创建应用实例，并注入可替换的配置供后续依赖使用。"""
+    resolved_settings = settings or get_settings()
+
     app = FastAPI(
         title="OpsMind API",
         version=API_VERSION,
         description="面向受控运维诊断 Agent 的 HTTP 服务。",
+        # 仅在开发环境启用调试模式，避免生产环境泄露调用栈。
+        debug=resolved_settings.app_env is AppEnvironment.DEVELOPMENT,
         # Redoc 暂不启用，后续接口较多时再评估是否保留。
         redoc_url=None,
     )
+
+    # 保存解析后的配置；路由层不应自行读取环境变量。
+    app.state.settings = resolved_settings
 
     # 所有公开 API 使用 /api/v1 前缀，便于后续版本演进。
     app.include_router(system_router)
