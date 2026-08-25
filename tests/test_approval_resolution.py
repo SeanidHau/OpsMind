@@ -156,6 +156,7 @@ def test_edit_command_requires_a_call_tool_and_forbids_non_edit_payload() -> Non
             edited_action=AgentAction(
                 action_type=ActionType.ASK_USER,
                 intent="补充时间窗口",
+                question="故障大约从何时开始？",
                 reason="这不是工具动作。",
             ),
         )

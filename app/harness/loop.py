@@ -112,6 +112,7 @@ def create_initial_state(
         "ticket": None,
         "retry_count": 0,
         "question_count": 0,
+        "pending_question": None,
         "tool_call_count": 0,
         "step_count": 0,
         "errors": [],
@@ -139,6 +140,7 @@ class HarnessLoop:
         report_renderer: MarkdownReportRenderer | None = None,
         run_archive: RunArchive | None = None,
         max_replan_corrections: int = 1,
+        max_user_questions: int = 2,
     ) -> None:
         if max_tool_retries < 0:
             raise ValueError("max_tool_retries must not be negative")
@@ -150,6 +152,8 @@ class HarnessLoop:
 
         if max_replan_corrections < 0:
             raise ValueError("max_replan_corrections must not be negative")
+        if max_user_questions < 0:
+            raise ValueError("max_user_questions must not be negative")
 
         self._action_provider = action_provider
         self._tool_executor = tool_executor
@@ -160,6 +164,7 @@ class HarnessLoop:
         self._max_tool_retries = max_tool_retries
         self._max_model_retries = max_model_retries
         self._max_replan_corrections = max_replan_corrections
+        self._max_user_questions = max_user_questions
         self._model_retry_delay_seconds = model_retry_delay_seconds
         self._model_failure_classifier = model_failure_classifier or DefaultModelFailureClassifier()
         self._tool_failure_classifier = tool_failure_classifier or DefaultToolFailureClassifier()
@@ -191,6 +196,52 @@ class HarnessLoop:
             raise ValueError("approved run must not have a terminal status")
 
         return await self._run_and_archive(state, replace_checkpoint=True)
+
+    async def resume_with_user_input(
+        self,
+        run_id: UUID,
+        answer: str,
+    ) -> DiagnosisState:
+        """写入用户回答后，从等待输入的 checkpoint 继续运行。"""
+        normalized_answer = answer.strip()
+        if not normalized_answer:
+            raise ValueError("answer must not be blank")
+
+        state = self.restore_checkpoint(run_id)
+        if state.get("terminal_status") is not HarnessStatus.WAITING_USER_INPUT:
+            raise ValueError("run is not waiting for user input")
+
+        pending_question = state.get("pending_question")
+        action = state.get("current_action")
+        if pending_question is None or action is None:
+            raise ValueError("pending user question is missing")
+
+        resumed_event = self._new_event(
+            state,
+            event_type=EventType.RUN_RESUMED,
+            node="resume_user_input",
+            action=action,
+            observation={"answer": normalized_answer},
+            decision="已接收用户补充信息，继续诊断。",
+        )
+        resumed_state = cast(
+            DiagnosisState,
+            {
+                **state,
+                # 问题与回答都写入会话，后续仅由 Context Manager 按上限暴露。
+                "conversation": [
+                    *state["conversation"],
+                    {"role": "assistant", "content": pending_question},
+                    {"role": "user", "content": normalized_answer},
+                ],
+                "current_action": None,
+                "policy_decision": None,
+                "pending_question": None,
+                "terminal_status": None,
+                "trajectory": [*state["trajectory"], resumed_event],
+            },
+        )
+        return await self._run_and_archive(resumed_state, replace_checkpoint=True)
 
     async def _run_and_archive(
         self,
@@ -311,6 +362,7 @@ class HarnessLoop:
         graph.add_node("apply_plan", self._apply_plan)
         graph.add_node("replan_correction", self._reject_replan_violation)
         graph.add_node("policy_check", self._policy_check)
+        graph.add_node("ask_user", self._ask_user)
         graph.add_node("execute_tool", self._execute_tool)
         graph.add_node("verify_progress", self._verify_progress)
         graph.add_node("build_context", self._build_context)
@@ -350,6 +402,7 @@ class HarnessLoop:
             self._route_after_policy,
             {
                 "apply_plan": "apply_plan",
+                "ask_user": "ask_user",
                 "execute_tool": "execute_tool",
                 "finish": "finish",
             },
@@ -684,6 +737,18 @@ class HarnessLoop:
             previous_tool_attempts=self._attempted_tool_actions(state),
         )
 
+        if (
+            decision.outcome is PolicyOutcome.ALLOW
+            and action.action_type is ActionType.ASK_USER
+            and state["question_count"] >= self._max_user_questions
+        ):
+            decision = PolicyDecision(
+                outcome=PolicyOutcome.BLOCK,
+                reason="本次运行已达到澄清追问上限。",
+                consumption=decision.consumption,
+                violations=("question_limit",),
+            )
+
         if decision.outcome is PolicyOutcome.ALLOW:
             # 只有允许执行的动作才写入新的预算状态。
             updated_budget = BudgetManager.consume(state["budget"], decision.consumption)
@@ -722,6 +787,26 @@ class HarnessLoop:
             "policy_decision": decision,
             "terminal_status": HarnessStatus.BLOCKED,
             "errors": [*state["errors"], decision.reason],
+            "trajectory": [*state["trajectory"], event],
+        }
+
+    def _ask_user(self, state: DiagnosisState) -> dict[str, Any]:
+        """保存问题并暂停运行，等待外部调用 resume_with_user_input。"""
+        action = self._require_current_action(state)
+        if action.action_type is not ActionType.ASK_USER or action.question is None:
+            raise RuntimeError("ask_user node requires an action with question")
+
+        event = self._new_event(
+            state,
+            event_type=EventType.RUN_PAUSED,
+            node="ask_user",
+            action=action,
+            decision=action.question,
+        )
+        return {
+            "terminal_status": HarnessStatus.WAITING_USER_INPUT,
+            "pending_question": action.question,
+            "question_count": state["question_count"] + 1,
             "trajectory": [*state["trajectory"], event],
         }
 
@@ -1127,6 +1212,8 @@ class HarnessLoop:
         action = self._require_current_action(state)
         if action.action_type is ActionType.UPDATE_PLAN:
             return "apply_plan"
+        if action.action_type is ActionType.ASK_USER:
+            return "ask_user"
         if action.action_type is ActionType.CALL_TOOL:
             return "execute_tool"
         return "finish"

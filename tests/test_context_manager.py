@@ -70,6 +70,26 @@ def test_build_respects_character_budget_and_marks_truncation() -> None:
     assert snapshot.items[0].source is ContextSource.TASK
 
 
+def test_build_includes_recent_conversation_without_mutating_state() -> None:
+    """最近用户澄清应进入最小上下文，完整会话保持在运行状态中。"""
+    state = make_state()
+    state["conversation"] = [
+        {"role": "assistant", "content": "故障大约从何时开始？"},
+        {"role": "user", "content": "今天 10:15 左右开始变慢。"},
+    ]
+    original_state = deepcopy(state)
+
+    snapshot = ContextManager(max_chars=1_000, max_items=10).build(state)  # type: ignore[arg-type]
+
+    assert [
+        item.content for item in snapshot.items if item.source is ContextSource.CONVERSATION
+    ] == [
+        "assistant: 故障大约从何时开始？",
+        "user: 今天 10:15 左右开始变慢。",
+    ]
+    assert state == original_state
+
+
 def test_invalid_limits_are_rejected() -> None:
     """无效上下文限制应在启动阶段失败，而不是运行时静默降级。"""
     with pytest.raises(ValueError, match="max_chars"):

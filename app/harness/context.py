@@ -73,6 +73,23 @@ class ContextManager:
             )
         ]
 
+        # 只保留最近四条对话，避免澄清轮次持续扩大模型上下文。
+        for index, message in enumerate(state["conversation"][-4:]):
+            content = str(message.get("content", "")).strip()
+            if not content:
+                continue
+
+            role = str(message.get("role", "unknown"))
+            candidates.append(
+                ContextItem(
+                    source=ContextSource.CONVERSATION,
+                    reference=f"conversation:{index}",
+                    content=f"{role}: {content}",
+                    # 用户澄清通常比历史工具结果更直接影响下一步诊断。
+                    priority=95,
+                )
+            )
+
         candidates.extend(
             ContextItem(
                 source=ContextSource.PLAN,

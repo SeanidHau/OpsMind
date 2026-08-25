@@ -59,6 +59,7 @@ class TrajectoryEvaluator:
         expected_events = {
             HarnessStatus.COMPLETED: {EventType.RUN_COMPLETED},
             HarnessStatus.WAITING_APPROVAL: {EventType.RUN_PAUSED},
+            HarnessStatus.WAITING_USER_INPUT: {EventType.RUN_PAUSED},
             HarnessStatus.FAILED: {EventType.RUN_FAILED},
             HarnessStatus.BLOCKED: {EventType.ACTION_BLOCKED, EventType.VERIFICATION_FAILED},
             HarnessStatus.STALLED: {EventType.VERIFICATION_FAILED},

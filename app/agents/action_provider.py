@@ -41,6 +41,8 @@ class LangChainActionProvider:
     你是 OpsMind 的诊断规划模型。只能提出符合 AgentAction schema 的下一步动作。
     不要声称执行过工具；工具执行由 Harness 完成。
     证据不足时，选择 call_tool 或 ask_user。
+    当选择 ask_user 时，必须在 question 字段中提出一个明确、可回答的问题。
+    只有当前上下文无法支持安全诊断时才追问，不要将多个独立问题合并为一次 ask_user。
 
     当 plan_version 为 0 时，先选择 update_plan，并提交 2 到 5 个可执行计划项。
     当 replan_requested 为 true 时，必须先选择 update_plan，说明新证据或停滞原因，
@@ -92,6 +94,7 @@ class LangChainActionProvider:
             "replan_reason": state.get("replan_reason"),
             "replan_feedback": state.get("replan_feedback"),
             "replan_correction_count": state.get("replan_correction_count", 0),
+            "question_count": state.get("question_count", 0),
         }
         messages: list[BaseMessage] = [
             SystemMessage(content=self._SYSTEM_INSTRUCTION),

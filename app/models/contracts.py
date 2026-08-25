@@ -94,6 +94,7 @@ class HarnessStatus(StrEnum):
     COMPLETED = "completed"
     BLOCKED = "blocked"
     WAITING_APPROVAL = "waiting_approval"
+    WAITING_USER_INPUT = "waiting_user_input"
     STALLED = "stalled"
     FAILED = "failed"
 
@@ -116,6 +117,7 @@ class ContextSource(StrEnum):
     """模型上下文条目的来源类型"""
 
     TASK = "task"
+    CONVERSATION = "conversation"
     PLAN = "plan"
     ERROR = "error"
     EVIDENCE = "evidence"
@@ -447,6 +449,8 @@ class AgentAction(BaseModel):
     tool_name: str | None = None
     tool_args: dict[str, Any] = Field(default_factory=dict)
     expected_observation: str | None = Field(default=None, max_length=1_000)
+    # ask_user 动作必须提供面向用户的明确问题。
+    question: str | None = Field(default=None, min_length=1, max_length=1_000)
     reason: str = Field(min_length=1, max_length=2_000)
     plan: list[PlanItem] = Field(default_factory=list, max_length=10)
 
@@ -476,6 +480,12 @@ class AgentAction(BaseModel):
                 raise ValueError("plan is required for update_plan actions")
         elif self.plan:
             raise ValueError("plan is only allowed for update_plan actions")
+
+        if self.action_type is ActionType.ASK_USER:
+            if self.question is None:
+                raise ValueError("question is required for ask_user actions")
+        elif self.question is not None:
+            raise ValueError("question is only allowed for ask_user actions")
 
         return self
 
@@ -689,6 +699,8 @@ class DiagnosisState(TypedDict):
     replan_feedback: NotRequired[str | None]
     replan_correction_count: NotRequired[int]
     approval_resolution: NotRequired[ApprovalResolution | None]
+    # ask_user 暂停时保存待回答的问题；恢复后清空。
+    pending_question: NotRequired[str | None]
 
     # 诊断领域状态
     retrieved_documents: list[dict[str, Any]]

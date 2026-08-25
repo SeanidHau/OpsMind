@@ -103,6 +103,7 @@ def test_update_plan_requires_plan_and_other_actions_reject_it() -> None:
         AgentAction(
             action_type=ActionType.ASK_USER,
             intent="补充故障时间",
+            question="故障大约从何时开始？",
             reason="需要缩小时间窗口。",
             plan=[item],
         )
@@ -146,6 +147,7 @@ def test_event_uses_utc_timestamp_and_serializes_nested_action() -> None:
     action = AgentAction(
         action_type=ActionType.ASK_USER,
         intent="补充故障发生时间",
+        question="故障大约从何时开始？",
         reason="当前日志检索缺少时间窗口",
     )
     event = AgentEvent(
@@ -157,6 +159,24 @@ def test_event_uses_utc_timestamp_and_serializes_nested_action() -> None:
 
     assert event.timestamp.tzinfo == UTC
     assert event.model_dump(mode="json")["action"]["action_type"] == "ask_user"
+
+
+def test_ask_user_requires_question_and_rejects_question_on_other_actions() -> None:
+    """澄清问题只能由 ask_user 动作携带。"""
+    with pytest.raises(ValidationError, match="question is required"):
+        AgentAction(
+            action_type=ActionType.ASK_USER,
+            intent="确认时间窗口",
+            reason="需要缩小日志范围。",
+        )
+
+    with pytest.raises(ValidationError, match="question is only allowed"):
+        AgentAction(
+            action_type=ActionType.FAIL,
+            intent="结束诊断",
+            reason="无法继续。",
+            question="这不应被允许。",
+        )
 
 
 def test_plan_and_graph_state_expose_required_fields() -> None:
