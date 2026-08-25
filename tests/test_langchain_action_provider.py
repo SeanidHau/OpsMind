@@ -15,6 +15,7 @@ from app.models.contracts import (
     ContextItem,
     ContextSnapshot,
     ContextSource,
+    ModelInvocation,
 )
 from tests.support import diagnosis_report
 
@@ -37,12 +38,32 @@ class FakeChatModel:
 
     def __init__(self, response: AgentAction | dict[str, Any]) -> None:
         self.schema: type[AgentAction] | None = None
+        self.include_raw: bool | None = None
         self.runnable = FakeStructuredRunnable(response)
 
-    def with_structured_output(self, schema: type[AgentAction]) -> FakeStructuredRunnable:
+    def with_structured_output(
+        self,
+        schema: type[AgentAction],
+        *,
+        include_raw: bool = False,
+    ) -> FakeStructuredRunnable:
         """记录绑定的 Pydantic schema 并返回结构化 Runnable。"""
         self.schema = schema
+        self.include_raw = include_raw
         return self.runnable
+
+
+class FakeRawResponse:
+    """模拟携带 LangChain 用量元数据的原始模型响应。"""
+
+    def __init__(
+        self,
+        *,
+        usage_metadata: dict[str, Any] | None = None,
+        response_metadata: dict[str, Any] | None = None,
+    ) -> None:
+        self.usage_metadata = usage_metadata
+        self.response_metadata = response_metadata
 
 
 def make_state() -> dict[str, Any]:
@@ -95,10 +116,13 @@ async def test_provider_binds_agent_action_schema_and_uses_model_context() -> No
     )
     provider = LangChainActionProvider(model)
 
-    action = await provider.propose_action(make_state())
+    invocation = await provider.propose_action(make_state())
 
-    assert action.action_type is ActionType.CALL_TOOL
+    assert isinstance(invocation, ModelInvocation)
+    assert invocation.action.action_type is ActionType.CALL_TOOL
+    assert invocation.usage.total_tokens == 0
     assert model.schema is AgentAction
+    assert model.include_raw is True
     messages = model.runnable.inputs[0]
     assert isinstance(messages[0], SystemMessage)
     assert isinstance(messages[1], HumanMessage)
@@ -131,9 +155,42 @@ async def test_provider_validates_dictionary_response_against_action_contract() 
         }
     )
 
-    action = await LangChainActionProvider(model).propose_action(make_state())
+    invocation = await LangChainActionProvider(model).propose_action(make_state())
 
-    assert action.action_type is ActionType.FINAL_ANSWER
+    assert invocation.action.action_type is ActionType.FINAL_ANSWER
+
+
+@pytest.mark.asyncio
+async def test_provider_extracts_raw_usage_and_calculates_cost() -> None:
+    """Provider 应从原始响应提取 Token，并按注入价格估算成本。"""
+    raw_response = FakeRawResponse(
+        usage_metadata={"input_tokens": 120, "output_tokens": 30},
+    )
+    model = FakeChatModel(
+        {
+            "raw": raw_response,
+            "parsed": AgentAction(
+                action_type=ActionType.CALL_TOOL,
+                intent="查询指标",
+                tool_name="query_metrics",
+                tool_args={"service": "payment-service"},
+                reason="收集诊断证据。",
+            ),
+            "parsing_error": None,
+        }
+    )
+    provider = LangChainActionProvider(
+        model,
+        input_cost_per_1k_tokens=0.01,
+        output_cost_per_1k_tokens=0.02,
+    )
+
+    invocation = await provider.propose_action(make_state())
+
+    assert invocation.usage.input_tokens == 120
+    assert invocation.usage.output_tokens == 30
+    assert invocation.usage.total_tokens == 150
+    assert invocation.usage.estimated_cost_usd == pytest.approx(0.0018)
 
 
 @pytest.mark.asyncio

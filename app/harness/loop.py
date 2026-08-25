@@ -41,6 +41,8 @@ from app.models.contracts import (
     DiagnosisState,
     EventType,
     HarnessStatus,
+    ModelInvocation,
+    ModelUsage,
     PolicyDecision,
     PolicyOutcome,
     ReplayResult,
@@ -50,8 +52,11 @@ from app.models.contracts import (
 class ActionProvider(Protocol):
     """为当前状态异步提出下一个结构化动作。"""
 
-    async def propose_action(self, state: DiagnosisState) -> AgentAction:
-        """返回尚未经过策略校验的候选动作。"""
+    async def propose_action(
+        self,
+        state: DiagnosisState,
+    ) -> AgentAction | ModelInvocation:
+        """返回候选动作，必要时同时返回供应商用量。"""
 
 
 class ToolExecutor(Protocol):
@@ -458,7 +463,10 @@ class HarnessLoop:
             model_started_at = time.perf_counter()
 
             try:
-                action = await self._action_provider.propose_action(state)
+                response = await self._action_provider.propose_action(state)
+                invocation = self._normalize_model_response(response)
+                action = invocation.action
+                usage = invocation.usage
             except Exception as error:
                 model_latency_ms = self._elapsed_latency_ms(model_started_at)
                 model_event = self._new_event(
@@ -525,6 +533,14 @@ class HarnessLoop:
                 await asyncio.sleep(delay_seconds)
                 continue
             else:
+                usage_consumption = BudgetConsumption(
+                    tokens=usage.total_tokens,
+                    estimated_cost_usd=usage.estimated_cost_usd,
+                )
+                usage_exceeded = BudgetManager.exceeded_dimensions(
+                    updated_budget,
+                    usage_consumption,
+                )
                 model_latency_ms = self._elapsed_latency_ms(model_started_at)
                 model_event = self._new_event(
                     state,
@@ -532,7 +548,28 @@ class HarnessLoop:
                     node="propose_action",
                     decision=f"第 {attempt + 1} 次模型调用已完成。",
                     latency_ms=model_latency_ms,
+                    token_usage=usage.to_event_payload(),
                 )
+
+                if usage_exceeded:
+                    block_reason = "模型实际用量会超出本次运行预算。"
+                    blocked_event = self._new_event(
+                        state,
+                        event_type=EventType.ACTION_BLOCKED,
+                        node="propose_action",
+                        decision=block_reason,
+                        token_usage=usage.to_event_payload(),
+                    )
+                    return {
+                        # 模型调用已发生；超额用量只在事件中审计，不写入受限预算。
+                        "budget": updated_budget,
+                        "terminal_status": HarnessStatus.BLOCKED,
+                        "errors": [*state["errors"], block_reason],
+                        "trajectory": [*trajectory, model_event, blocked_event],
+                    }
+
+                # 仅在实际用量未超预算时，将 Token 和成本正式计入预算。
+                updated_budget = BudgetManager.consume(updated_budget, usage_consumption)
                 action_event = self._new_event(
                     state,
                     event_type=EventType.ACTION_PROPOSED,
@@ -1092,6 +1129,17 @@ class HarnessLoop:
         return math.ceil(max(0.0, (time.perf_counter() - started_at) * 1_000))
 
     @staticmethod
+    def _normalize_model_response(
+        response: AgentAction | ModelInvocation,
+    ) -> ModelInvocation:
+        """兼容旧 Provider，并统一转换为带用量的模型结果。"""
+        if isinstance(response, ModelInvocation):
+            return response
+
+        # 旧 Provider 只返回 AgentAction 时，默认没有供应商用量。
+        return ModelInvocation(action=response, usage=ModelUsage())
+
+    @staticmethod
     def _new_event(
         state: DiagnosisState,
         *,
@@ -1102,6 +1150,7 @@ class HarnessLoop:
         decision: str | None = None,
         error: str | None = None,
         latency_ms: int | None = None,
+        token_usage: dict[str, int | float] | None = None,
     ) -> AgentEvent:
         """创建与当前状态关联的统一审计事件。"""
         return AgentEvent(
@@ -1114,4 +1163,5 @@ class HarnessLoop:
             decision=decision,
             error=error,
             latency_ms=latency_ms,
+            token_usage=token_usage,
         )

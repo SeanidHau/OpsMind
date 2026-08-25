@@ -454,6 +454,39 @@ class AgentAction(BaseModel):
         return self
 
 
+class ModelUsage(BaseModel):
+    """记录一次模型调用的 Token 和估算成本。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    estimated_cost_usd: float = Field(default=0.0, ge=0)
+
+    @property
+    def total_tokens(self) -> int:
+        """返回输入和输出 Token 总量。"""
+        return self.input_tokens + self.output_tokens
+
+    def to_event_payload(self) -> dict[str, int | float]:
+        """转换为可写入 AgentEvent 的用量结构。"""
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+            "estimated_cost_usd": self.estimated_cost_usd,
+        }
+
+
+class ModelInvocation(BaseModel):
+    """模型动作及其供应商用量的组合结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: AgentAction
+    usage: ModelUsage = Field(default_factory=ModelUsage)
+
+
 class AgentEvent(BaseModel):
     """记录单个 Harness 步骤产生的可审计事件。"""
 
@@ -467,7 +500,7 @@ class AgentEvent(BaseModel):
     node: str | None = Field(default=None, max_length=4_000)
     action: AgentAction | None = None
     observation: dict[str, Any] | None = None
-    token_usage: dict[str, int] | None = None
+    token_usage: dict[str, int | float] | None = None
     input_summary: str | None = Field(default=None, max_length=4_000)
     latency_ms: int | None = Field(default=None, ge=0)
     decision: str | None = Field(default=None, max_length=2_000)
@@ -682,6 +715,8 @@ __all__ = [
     "IncidentScenario",
     "KnowledgeChunk",
     "KnowledgeDocument",
+    "ModelInvocation",
+    "ModelUsage",
     "PlanItem",
     "PlanRevision",
     "PlanStatus",
