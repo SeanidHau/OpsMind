@@ -17,6 +17,7 @@ from app.models.contracts import (
     BudgetState,
     EventType,
     HarnessStatus,
+    PlanItem,
     ToolPolicy,
     ToolRiskLevel,
 )
@@ -32,10 +33,17 @@ class QueueActionProvider:
     def __init__(self, actions: list[AgentAction]) -> None:
         self._actions = deque(actions)
         self.calls = 0
+        self.replan_inputs: list[dict[str, object]] = []
 
     async def propose_action(self, state: dict[str, Any]) -> AgentAction:
         """返回下一条预置动作。"""
-        del state
+        self.replan_inputs.append(
+            {
+                "requested": state.get("replan_requested"),
+                "reason": state.get("replan_reason"),
+                "feedback": state.get("replan_feedback"),
+            }
+        )
         self.calls += 1
         return self._actions.popleft()
 
@@ -69,31 +77,45 @@ class RetryRuntimeErrorClassifier:
         )
 
 
-def tool_action() -> AgentAction:
+def tool_action(tool_name: str = "query_metrics") -> AgentAction:
     """构造低风险只读工具动作。"""
     return AgentAction(
         action_type=ActionType.CALL_TOOL,
         intent="查询支付服务指标",
-        tool_name="query_metrics",
+        tool_name=tool_name,
         tool_args={"service": "payment-service"},
         reason="收集诊断证据。",
     )
 
 
-def final_action() -> AgentAction:
+def final_action(
+    *,
+    tool_name: str = "query_metrics",
+    observation: dict[str, Any] = OBSERVATION,
+) -> AgentAction:
     """构造引用确定性工具观察结果的最终回答。"""
     return AgentAction(
         action_type=ActionType.FINAL_ANSWER,
         intent="输出诊断结论",
         reason="已获得可引用的工具观察结果。",
         report=report_for_observation(
-            tool_name="query_metrics",
-            observation=OBSERVATION,
+            tool_name=tool_name,
+            observation=observation,
         ),
     )
 
 
-def make_state() -> dict[str, Any]:
+def update_plan_action() -> AgentAction:
+    """构造重试耗尽后必须提交的替代诊断计划。"""
+    return AgentAction(
+        action_type=ActionType.UPDATE_PLAN,
+        intent="修订诊断计划",
+        reason="指标查询连续失败，改用日志查询收集证据。",
+        plan=[PlanItem(title="查询支付服务日志", rationale="替代不可用的指标查询路径。")],
+    )
+
+
+def make_state(*, max_model_calls: int = 3) -> dict[str, Any]:
     """构造具有足够模型与工具预算的初始状态。"""
     return create_initial_state(
         session_id="session-tool-failure",
@@ -102,7 +124,7 @@ def make_state() -> dict[str, Any]:
         budget=BudgetState(
             max_steps=5,
             max_tool_calls=3,
-            max_model_calls=3,
+            max_model_calls=max_model_calls,
             max_tokens=1_000,
             max_runtime_seconds=60,
             max_estimated_cost_usd=1.0,
@@ -186,5 +208,60 @@ async def test_loop_accepts_injected_tool_failure_classifier() -> None:
     )
     assert retry_event.observation == {
         "category": "custom_runtime_error",
+        "retryable": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_loop_replans_after_transient_failure_retries_are_exhausted() -> None:
+    """启用降级后，临时故障必须先重规划，再执行替代工具。"""
+    fallback_observation = {"status": "ok", "tool_name": "query_logs"}
+    provider = QueueActionProvider(
+        [
+            tool_action(),
+            update_plan_action(),
+            tool_action("query_logs"),
+            final_action(tool_name="query_logs", observation=fallback_observation),
+        ]
+    )
+    executor = OutcomeToolExecutor(
+        [
+            ConnectionError("network down"),
+            ConnectionError("network down"),
+            fallback_observation,
+        ]
+    )
+    loop = HarnessLoop(
+        action_provider=provider,
+        tool_executor=executor,
+        policy=ActionPolicy(
+            [
+                ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW),
+                ToolPolicy(name="query_logs", risk_level=ToolRiskLevel.LOW),
+            ]
+        ),
+        max_tool_retries=1,
+        replan_on_tool_failure=True,
+    )
+
+    result = await loop.run(make_state(max_model_calls=4))  # type: ignore[arg-type]
+
+    assert result["terminal_status"] is HarnessStatus.COMPLETED
+    assert executor.calls == 3
+    assert provider.calls == 4
+    assert result["tool_call_count"] == 3
+    assert result["replan_requested"] is False
+    assert provider.replan_inputs[1] == {
+        "requested": True,
+        "reason": "工具调用在重试耗尽后失败，需要重新规划替代诊断路径。",
+        "feedback": "network down",
+    }
+    fallback_event = next(
+        event
+        for event in result["trajectory"]
+        if event.event_type is EventType.VERIFICATION_FAILED and event.node == "execute_tool"
+    )
+    assert fallback_event.observation == {
+        "category": "transient_transport_error",
         "retryable": True,
     }

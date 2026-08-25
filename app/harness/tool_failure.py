@@ -15,6 +15,7 @@ class ToolFailure:
     retryable: bool
     category: str
     message: str
+    fallback_eligible: bool = False
 
 
 class ToolFailureClassifier(Protocol):
@@ -53,6 +54,8 @@ class DefaultToolFailureClassifier:
                 retryable=True,
                 category="transient_transport_error",
                 message=error_text,
+                # 重试耗尽后，可让模型选择其他诊断工具或澄清路径。
+                fallback_eligible=True,
             )
 
         # 未识别错误默认不重试，避免放大副作用或掩盖程序缺陷。

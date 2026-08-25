@@ -142,6 +142,7 @@ class HarnessLoop:
         run_archive: RunArchive | None = None,
         max_replan_corrections: int = 1,
         max_user_questions: int = 2,
+        replan_on_tool_failure: bool = False,
     ) -> None:
         if max_tool_retries < 0:
             raise ValueError("max_tool_retries must not be negative")
@@ -166,6 +167,7 @@ class HarnessLoop:
         self._max_model_retries = max_model_retries
         self._max_replan_corrections = max_replan_corrections
         self._max_user_questions = max_user_questions
+        self._replan_on_tool_failure = replan_on_tool_failure
         self._model_retry_delay_seconds = model_retry_delay_seconds
         self._model_failure_classifier = model_failure_classifier or DefaultModelFailureClassifier()
         self._tool_failure_classifier = tool_failure_classifier or DefaultToolFailureClassifier()
@@ -423,6 +425,7 @@ class HarnessLoop:
             self._route_after_tool,
             {
                 "retry_tool": "execute_tool",
+                "build_context": "build_context",
                 "verify_progress": "verify_progress",
                 "finish": "finish",
             },
@@ -1023,6 +1026,29 @@ class HarnessLoop:
                     "trajectory": [*state["trajectory"], started_event, blocked_event],
                 }
 
+            if self._replan_on_tool_failure and failure.fallback_eligible:
+                replan_reason = "工具调用在重试耗尽后失败，需要重新规划替代诊断路径。"
+                fallback_event = self._new_event(
+                    state,
+                    event_type=EventType.VERIFICATION_FAILED,
+                    node="execute_tool",
+                    action=action,
+                    observation=failure_observation,
+                    decision=replan_reason,
+                    error=failure.message,
+                    latency_ms=tool_latency_ms,
+                )
+                return {
+                    "retry_count": 0,
+                    "tool_call_count": attempted_tool_calls,
+                    "errors": [*state["errors"], failure.message],
+                    "replan_requested": True,
+                    "replan_reason": replan_reason,
+                    "replan_feedback": failure.message,
+                    "replan_correction_count": 0,
+                    "trajectory": [*state["trajectory"], started_event, fallback_event],
+                }
+
             failed_event = self._new_event(
                 state,
                 event_type=EventType.RUN_FAILED,
@@ -1313,6 +1339,8 @@ class HarnessLoop:
         """按工具执行结果选择重试、验证进度或结束运行。"""
         if state.get("terminal_status") is not None:
             return "finish"
+        if state.get("replan_requested", False):
+            return "build_context"
         if state["retry_count"] > 0:
             return "retry_tool"
         return "verify_progress"
