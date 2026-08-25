@@ -451,6 +451,8 @@ class AgentAction(BaseModel):
     expected_observation: str | None = Field(default=None, max_length=1_000)
     # ask_user 动作必须提供面向用户的明确问题。
     question: str | None = Field(default=None, min_length=1, max_length=1_000)
+    # 可选绑定当前计划项；旧调用方不提供该字段时保持兼容。
+    plan_item_id: UUID | None = None
     reason: str = Field(min_length=1, max_length=2_000)
     plan: list[PlanItem] = Field(default_factory=list, max_length=10)
 
@@ -486,6 +488,12 @@ class AgentAction(BaseModel):
                 raise ValueError("question is required for ask_user actions")
         elif self.question is not None:
             raise ValueError("question is only allowed for ask_user actions")
+
+        if self.plan_item_id is not None and self.action_type not in (
+            ActionType.CALL_TOOL,
+            ActionType.ASK_USER,
+        ):
+            raise ValueError("plan_item_id is only allowed for call_tool or ask_user actions")
 
         return self
 

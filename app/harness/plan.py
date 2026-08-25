@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.models.contracts import PlanItem, PlanRevision
+from app.models.contracts import PlanItem, PlanRevision, PlanStatus
 
 
 class PlanManager:
@@ -25,6 +25,51 @@ class PlanManager:
             reason=reason,
             items=[item.model_copy(deep=True) for item in items],
         )
+
+    @classmethod
+    def start_item(cls, items: list[PlanItem], item_id: UUID) -> list[PlanItem]:
+        """校验依赖后，将待执行计划项转为 in_progress。"""
+        return cls._transition_item(items, item_id, PlanStatus.IN_PROGRESS)
+
+    @classmethod
+    def complete_item(cls, items: list[PlanItem], item_id: UUID) -> list[PlanItem]:
+        """将已开始的计划项转为 completed。"""
+        return cls._transition_item(items, item_id, PlanStatus.COMPLETED)
+
+    @classmethod
+    def _transition_item(
+        cls,
+        items: list[PlanItem],
+        item_id: UUID,
+        target_status: PlanStatus,
+    ) -> list[PlanItem]:
+        """返回状态迁移后的计划副本，绝不原地修改 LangGraph 状态。"""
+        cls._validate_items(items)
+        item_by_id = {item.id: item for item in items}
+        item = item_by_id.get(item_id)
+        if item is None:
+            raise ValueError("action references an unknown plan item")
+
+        if target_status is PlanStatus.IN_PROGRESS:
+            incomplete_dependencies = [
+                dependency_id
+                for dependency_id in item.depends_on
+                if item_by_id[dependency_id].status is not PlanStatus.COMPLETED
+            ]
+            if incomplete_dependencies:
+                raise ValueError("plan item dependencies are not completed")
+            if item.status not in (PlanStatus.PENDING, PlanStatus.IN_PROGRESS):
+                raise ValueError("plan item cannot be started from its current status")
+
+        if target_status is PlanStatus.COMPLETED and item.status is not PlanStatus.IN_PROGRESS:
+            raise ValueError("plan item must be in progress before completion")
+
+        return [
+            current.model_copy(update={"status": target_status})
+            if current.id == item_id
+            else current.model_copy(deep=True)
+            for current in items
+        ]
 
     @classmethod
     def _validate_items(cls, items: list[PlanItem]) -> None:

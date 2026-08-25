@@ -45,6 +45,8 @@ class LangChainActionProvider:
     只有当前上下文无法支持安全诊断时才追问，不要将多个独立问题合并为一次 ask_user。
 
     当 plan_version 为 0 时，先选择 update_plan，并提交 2 到 5 个可执行计划项。
+    执行 call_tool 或 ask_user 时，优先使用 context 中 plan:<UUID> 形式的 reference
+    填写 plan_item_id，使 Harness 能校验依赖和执行状态。
     当 replan_requested 为 true 时，必须先选择 update_plan，说明新证据或停滞原因，
     再选择新的工具路径。只有 update_plan 可以携带 plan 字段。
     replan_feedback 不为空时，上一条动作已被 Harness 拒绝。

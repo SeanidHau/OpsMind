@@ -43,6 +43,7 @@ from app.models.contracts import (
     HarnessStatus,
     ModelInvocation,
     ModelUsage,
+    PlanItem,
     PolicyDecision,
     PolicyOutcome,
     ReplayResult,
@@ -460,6 +461,23 @@ class HarnessLoop:
         if resolution.action != action:
             raise RuntimeError("approved action does not match the current action")
 
+        try:
+            updated_plan = self._prepare_plan_item(state, action)
+        except ValueError as error:
+            error_text = str(error)
+            event = self._new_event(
+                state,
+                event_type=EventType.ACTION_BLOCKED,
+                node="approve_action",
+                action=action,
+                decision=error_text,
+            )
+            return {
+                "terminal_status": HarnessStatus.BLOCKED,
+                "errors": [*state["errors"], error_text],
+                "trajectory": [*state["trajectory"], event],
+            }
+
         # 审批不绕过工具注册、重复调用检查和预算；只绕过重复的人工作业等待。
         decision = self._policy.evaluate(
             action,
@@ -486,6 +504,7 @@ class HarnessLoop:
             "policy_decision": decision,
             "budget": BudgetManager.consume(state["budget"], decision.consumption),
             "step_count": state["step_count"] + 1,
+            **({"plan": updated_plan} if updated_plan is not None else {}),
         }
 
     async def _propose_action(self, state: DiagnosisState) -> dict[str, Any]:
@@ -728,6 +747,30 @@ class HarnessLoop:
     def _policy_check(self, state: DiagnosisState) -> dict[str, Any]:
         """在任何工具执行前完成策略检查和预算消费。"""
         action = self._require_current_action(state)
+        try:
+            updated_plan = self._prepare_plan_item(state, action)
+        except ValueError as error:
+            error_text = str(error)
+            decision = PolicyDecision(
+                outcome=PolicyOutcome.BLOCK,
+                reason=error_text,
+                consumption=BudgetConsumption(),
+                violations=("plan:invalid_action",),
+            )
+            event = self._new_event(
+                state,
+                event_type=EventType.ACTION_BLOCKED,
+                node="policy_check",
+                action=action,
+                decision=error_text,
+            )
+            return {
+                "policy_decision": decision,
+                "terminal_status": HarnessStatus.BLOCKED,
+                "errors": [*state["errors"], error_text],
+                "trajectory": [*state["trajectory"], event],
+            }
+
         decision = self._policy.evaluate(
             action,
             state["budget"],
@@ -756,6 +799,7 @@ class HarnessLoop:
                 "policy_decision": decision,
                 "budget": updated_budget,
                 "step_count": state["step_count"] + 1,
+                **({"plan": updated_plan} if updated_plan is not None else {}),
             }
 
         if decision.outcome is PolicyOutcome.REQUIRE_APPROVAL:
@@ -789,6 +833,17 @@ class HarnessLoop:
             "errors": [*state["errors"], decision.reason],
             "trajectory": [*state["trajectory"], event],
         }
+
+    def _prepare_plan_item(
+        self,
+        state: DiagnosisState,
+        action: AgentAction,
+    ) -> list[PlanItem] | None:
+        """为绑定计划项的工具或澄清动作准备 in_progress 状态。"""
+        if action.plan_item_id is None:
+            return None
+
+        return self._plan_manager.start_item(state["plan"], action.plan_item_id)
 
     def _ask_user(self, state: DiagnosisState) -> dict[str, Any]:
         """保存问题并暂停运行，等待外部调用 resume_with_user_input。"""
@@ -1002,6 +1057,7 @@ class HarnessLoop:
             "evidence": updated_evidence,
             "tool_results": [*state["tool_results"], observation],
             "tool_call_count": state["tool_call_count"] + 1,
+            **self._complete_plan_item(state, action),
             "trajectory": [
                 *state["trajectory"],
                 started_event,
@@ -1277,6 +1333,17 @@ class HarnessLoop:
             and event.action is not None
             and event.action.action_type is ActionType.CALL_TOOL
         )
+
+    def _complete_plan_item(
+        self,
+        state: DiagnosisState,
+        action: AgentAction,
+    ) -> dict[str, list[PlanItem]]:
+        """工具成功后完成绑定计划项；未绑定动作不改变旧计划行为。"""
+        if action.plan_item_id is None:
+            return {}
+
+        return {"plan": self._plan_manager.complete_item(state["plan"], action.plan_item_id)}
 
     @staticmethod
     def _attempted_tool_actions(state: DiagnosisState) -> tuple[AgentAction, ...]:

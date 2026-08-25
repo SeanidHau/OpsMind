@@ -179,6 +179,26 @@ def test_ask_user_requires_question_and_rejects_question_on_other_actions() -> N
         )
 
 
+def test_plan_item_id_is_limited_to_executable_actions() -> None:
+    """计划项绑定只能出现在工具调用或澄清追问动作中。"""
+    item = PlanItem(title="查询指标", rationale="收集性能证据")
+
+    with pytest.raises(ValidationError, match="plan_item_id is only allowed"):
+        AgentAction(
+            action_type=ActionType.FINAL_ANSWER,
+            intent="输出结果",
+            reason="诊断完成。",
+            report=DiagnosisReport(
+                summary="诊断完成。",
+                probable_root_cause="指标异常。",
+                confidence=0.5,
+                evidence_ids=["evidence-1"],
+                recommended_actions=["继续观察。"],
+            ),
+            plan_item_id=item.id,
+        )
+
+
 def test_plan_and_graph_state_expose_required_fields() -> None:
     """计划项默认待处理，Graph State 必须暴露 Harness 所需的关键字段。"""
     plan_item = PlanItem(title="查询接口延迟", rationale="验证用户报告的慢请求")
