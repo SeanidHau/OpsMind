@@ -1,10 +1,11 @@
 """诊断运行 API 的请求与响应模型。"""
 
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.contracts import HarnessStatus
+from app.models.contracts import ActionType, EventType, HarnessStatus, ReplayMode
 
 
 class CreateDiagnosisRunRequest(BaseModel):
@@ -28,6 +29,36 @@ class DiagnosisRunResponse(BaseModel):
     final_answer: str | None
     pending_question: str | None
     errors: list[str]
+
+
+class DiagnosisTrajectoryEventResponse(BaseModel):
+    """诊断轨迹中可安全公开的一条审计事件。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: UUID
+    step_id: int = Field(ge=0)
+    event_type: EventType
+    timestamp: datetime
+    node: str | None
+    action_type: ActionType | None
+    tool_name: str | None
+    latency_ms: int | None = Field(default=None, ge=0)
+    token_usage: dict[str, int | float] | None
+    decision: str | None
+    error: str | None
+
+
+class DiagnosisRunTrajectoryResponse(BaseModel):
+    """已归档诊断运行的安全轨迹视图。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID
+    mode: ReplayMode
+    status: HarnessStatus | None
+    event_count: int = Field(ge=0)
+    events: list[DiagnosisTrajectoryEventResponse]
 
 
 class ResumeDiagnosisRunRequest(BaseModel):

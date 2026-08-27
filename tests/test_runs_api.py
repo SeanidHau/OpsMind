@@ -7,10 +7,14 @@ from fastapi.testclient import TestClient
 from app.api.main import create_app
 from app.harness.loop import create_initial_state
 from app.models.contracts import (
+    ActionType,
+    AgentAction,
+    AgentEvent,
     ApprovalCommand,
     ApprovalDecision,
     BudgetState,
     DiagnosisState,
+    EventType,
     HarnessStatus,
     ReplayMode,
     ReplayResult,
@@ -226,6 +230,94 @@ def test_run_query_endpoint_returns_not_found_for_unknown_run() -> None:
 
     with TestClient(create_app(diagnosis_runner=runner)) as client:
         response = client.get(f"/api/v1/runs/{uuid4()}")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "run not found"}
+
+
+def test_run_trajectory_endpoint_returns_safe_cached_events() -> None:
+    """轨迹查询仅读取快照，并且不返回工具参数或原始观察结果。"""
+    run_id = uuid4()
+    runner = ReplayDiagnosisRunner(
+        ReplayResult(
+            source_run_id=run_id,
+            mode=ReplayMode.CACHED,
+            terminal_status=HarnessStatus.COMPLETED,
+            final_state={
+                "step_count": 1,
+                "final_answer": "诊断已完成。",
+                "pending_question": None,
+                "errors": [],
+            },
+            trajectory=[
+                AgentEvent(
+                    run_id=run_id,
+                    step_id=1,
+                    event_type=EventType.TOOL_FINISHED,
+                    node="execute_tool",
+                    action=AgentAction(
+                        action_type=ActionType.CALL_TOOL,
+                        intent="读取服务状态。",
+                        tool_name="get_service_status",
+                        tool_args={"service": "payment", "api_key": "secret"},
+                        reason="需要确认服务健康状态。",
+                    ),
+                    observation={"credentials": "secret", "status": "healthy"},
+                    latency_ms=12,
+                    token_usage={"total_tokens": 8},
+                    decision="工具执行完成。",
+                )
+            ],
+        )
+    )
+
+    with TestClient(create_app(diagnosis_runner=runner)) as client:
+        response = client.get(f"/api/v1/runs/{run_id}/trajectory")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["run_id"] == str(run_id)
+    assert payload["mode"] == "cached"
+    assert payload["status"] == "completed"
+    assert payload["event_count"] == 1
+    assert payload["events"][0] == {
+        "event_id": payload["events"][0]["event_id"],
+        "step_id": 1,
+        "event_type": "tool_finished",
+        "timestamp": payload["events"][0]["timestamp"],
+        "node": "execute_tool",
+        "action_type": "call_tool",
+        "tool_name": "get_service_status",
+        "latency_ms": 12,
+        "token_usage": {"total_tokens": 8},
+        "decision": "工具执行完成。",
+        "error": None,
+    }
+    assert "tool_args" not in payload["events"][0]
+    assert "observation" not in payload["events"][0]
+    assert runner.read_run_ids == [run_id]
+    assert runner.calls == []
+
+
+def test_run_trajectory_endpoint_returns_not_found_for_unknown_run() -> None:
+    """未知运行的轨迹查询必须返回 404。"""
+    runner = ReplayDiagnosisRunner(
+        ReplayResult(
+            source_run_id=uuid4(),
+            mode=ReplayMode.CACHED,
+            terminal_status=HarnessStatus.BLOCKED,
+            final_state={
+                "step_count": 0,
+                "final_answer": None,
+                "pending_question": None,
+                "errors": ["blocked"],
+            },
+            trajectory=[],
+        )
+    )
+
+    with TestClient(create_app(diagnosis_runner=runner)) as client:
+        response = client.get(f"/api/v1/runs/{uuid4()}/trajectory")
 
     assert response.status_code == 404
     assert response.json() == {"detail": "run not found"}

@@ -16,6 +16,8 @@ from app.api.dependencies import (
 from app.api.schemas.runs import (
     CreateDiagnosisRunRequest,
     DiagnosisRunResponse,
+    DiagnosisRunTrajectoryResponse,
+    DiagnosisTrajectoryEventResponse,
     ResumeDiagnosisRunRequest,
 )
 from app.diagnosis.runner import (
@@ -25,7 +27,7 @@ from app.diagnosis.runner import (
     DiagnosisRunReader,
     DiagnosisRunResumer,
 )
-from app.models.contracts import ApprovalCommand
+from app.models.contracts import AgentEvent, ApprovalCommand, ReplayResult
 
 router = APIRouter(prefix="/api/v1", tags=["runs"])
 
@@ -39,6 +41,35 @@ def response_from_state(result: Mapping[str, Any]) -> DiagnosisRunResponse:
         final_answer=result.get("final_answer"),
         pending_question=result.get("pending_question"),
         errors=list(result["errors"]),
+    )
+
+
+def trajectory_event_response(event: AgentEvent) -> DiagnosisTrajectoryEventResponse:
+    """投影审计事件，排除工具参数、工具观察结果和模型上下文。"""
+    return DiagnosisTrajectoryEventResponse(
+        event_id=event.event_id,
+        step_id=event.step_id,
+        event_type=event.event_type,
+        timestamp=event.timestamp,
+        node=event.node,
+        action_type=event.action.action_type if event.action is not None else None,
+        tool_name=event.action.tool_name if event.action is not None else None,
+        latency_ms=event.latency_ms,
+        token_usage=event.token_usage,
+        decision=event.decision,
+        error=event.error,
+    )
+
+
+def trajectory_response(replay: ReplayResult) -> DiagnosisRunTrajectoryResponse:
+    """将缓存回放转换为可公开查询的安全轨迹。"""
+    events = [trajectory_event_response(event) for event in replay.trajectory]
+    return DiagnosisRunTrajectoryResponse(
+        run_id=replay.source_run_id,
+        mode=replay.mode,
+        status=replay.terminal_status,
+        event_count=len(events),
+        events=events,
     )
 
 
@@ -178,3 +209,25 @@ async def get_diagnosis_run(
         pending_question=final_state.get("pending_question"),
         errors=list(final_state["errors"]),
     )
+
+
+@router.get(
+    "/runs/{run_id}/trajectory",
+    response_model=DiagnosisRunTrajectoryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="读取已归档诊断运行的安全轨迹",
+)
+async def get_diagnosis_run_trajectory(
+    run_id: UUID,
+    diagnosis_run_reader: Annotated[DiagnosisRunReader, Depends(get_diagnosis_run_reader)],
+) -> DiagnosisRunTrajectoryResponse:
+    """返回缓存时间线，不重新执行模型、工具或 Harness 节点。"""
+    try:
+        replay = diagnosis_run_reader.get_run(run_id)
+    except KeyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="run not found",
+        ) from error
+
+    return trajectory_response(replay)
