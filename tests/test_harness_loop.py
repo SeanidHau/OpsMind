@@ -11,6 +11,7 @@ from app.harness.progress import ProgressVerifier
 from app.models.contracts import (
     ActionType,
     AgentAction,
+    AgentEvent,
     BudgetState,
     EventType,
     HarnessStatus,
@@ -46,6 +47,34 @@ class RecordingToolExecutor:
         """记录执行动作，供断言策略层是否拦截调用。"""
         self.actions.append(action)
         return {"status": "ok", "tool_name": action.tool_name}
+
+
+class RecordingEventObserver:
+    """记录 Harness 发布的事件，模拟后续实时推送适配器。"""
+
+    def __init__(self) -> None:
+        self.events: list[AgentEvent] = []
+
+    def on_event(self, event: AgentEvent) -> None:
+        """保存收到的事件副本。"""
+        self.events.append(event)
+
+
+class MutatingEventObserver:
+    """故意修改收到的事件，用于验证 Harness 传递的是副本。"""
+
+    def on_event(self, event: AgentEvent) -> None:
+        """修改观察器副本，不应影响运行轨迹。"""
+        event.node = "observer_mutated"
+
+
+class FailingEventObserver:
+    """模拟不可用的外部事件消费者。"""
+
+    def on_event(self, event: AgentEvent) -> None:
+        """抛出异常，验证 Harness 不会中断。"""
+        del event
+        raise RuntimeError("event sink is unavailable")
 
 
 def make_budget(
@@ -122,6 +151,49 @@ async def test_loop_executes_allowed_tool_then_completes() -> None:
     assert EventType.TOOL_FINISHED in [event.event_type for event in result["trajectory"]]
     assert result["trajectory"][-2].event_type is EventType.RUN_COMPLETED
     assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
+
+
+@pytest.mark.asyncio
+async def test_loop_notifies_observer_with_the_complete_event_order() -> None:
+    """观察器按创建顺序收到完整轨迹的独立事件副本。"""
+    observer = RecordingEventObserver()
+    loop = HarnessLoop(
+        action_provider=QueueActionProvider([tool_action("query_metrics"), final_action()]),
+        tool_executor=RecordingToolExecutor(),
+        policy=ActionPolicy([ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)]),
+        event_observer=observer,
+    )
+
+    result = await loop.run(make_state(budget=make_budget()))
+
+    assert [event.event_type for event in observer.events] == [
+        event.event_type for event in result["trajectory"]
+    ]
+    assert observer.events[-1] is not result["trajectory"][-1]
+
+
+@pytest.mark.asyncio
+async def test_loop_observer_cannot_mutate_trajectory_or_interrupt_running() -> None:
+    """观察器修改失败都不能改变诊断运行结果。"""
+    mutating_loop = HarnessLoop(
+        action_provider=QueueActionProvider([tool_action("query_metrics"), final_action()]),
+        tool_executor=RecordingToolExecutor(),
+        policy=ActionPolicy([ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)]),
+        event_observer=MutatingEventObserver(),
+    )
+    failing_loop = HarnessLoop(
+        action_provider=QueueActionProvider([tool_action("query_metrics"), final_action()]),
+        tool_executor=RecordingToolExecutor(),
+        policy=ActionPolicy([ToolPolicy(name="query_metrics", risk_level=ToolRiskLevel.LOW)]),
+        event_observer=FailingEventObserver(),
+    )
+
+    mutated_result = await mutating_loop.run(make_state(budget=make_budget()))
+    failed_result = await failing_loop.run(make_state(budget=make_budget()))
+
+    assert all(event.node != "observer_mutated" for event in mutated_result["trajectory"])
+    assert mutated_result["terminal_status"] is HarnessStatus.COMPLETED
+    assert failed_result["terminal_status"] is HarnessStatus.COMPLETED
 
 
 @pytest.mark.asyncio

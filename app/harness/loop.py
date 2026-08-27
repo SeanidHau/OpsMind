@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import time
 from typing import Any, Protocol, cast
@@ -14,6 +15,7 @@ from langgraph.graph.state import CompiledStateGraph
 from app.harness.approval import ApprovalResolver
 from app.harness.budget import BudgetManager
 from app.harness.context import ContextManager
+from app.harness.events import HarnessEventObserver
 from app.harness.evidence import EvidenceCollector, EvidenceGate
 from app.harness.model_failure import (
     DefaultModelFailureClassifier,
@@ -48,6 +50,8 @@ from app.models.contracts import (
     PolicyOutcome,
     ReplayResult,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ActionProvider(Protocol):
@@ -141,6 +145,7 @@ class HarnessLoop:
         evidence_gate: EvidenceGate | None = None,
         report_renderer: MarkdownReportRenderer | None = None,
         run_archive: RunArchive | None = None,
+        event_observer: HarnessEventObserver | None = None,
         max_replan_corrections: int = 1,
         max_replans: int = 2,
         max_user_questions: int = 2,
@@ -180,6 +185,7 @@ class HarnessLoop:
         self._evidence_gate = evidence_gate or EvidenceGate()
         self._report_renderer = report_renderer or MarkdownReportRenderer()
         self._run_archive = run_archive or InMemoryRunArchive()
+        self._event_observer = event_observer
         self._cached_replay = CachedReplayService(self._run_archive)
         self._snapshot_factory = RunSnapshotFactory()
         self._state_restorer = RunStateRestorer()
@@ -224,6 +230,7 @@ class HarnessLoop:
         if pending_question is None or action is None:
             raise ValueError("pending user question is missing")
 
+        published_event_ids = {event.event_id for event in state["trajectory"]}
         resumed_event = self._new_event(
             state,
             event_type=EventType.RUN_RESUMED,
@@ -249,17 +256,26 @@ class HarnessLoop:
                 "trajectory": [*state["trajectory"], resumed_event],
             },
         )
-        return await self._run_and_archive(resumed_state, replace_checkpoint=True)
+        self._publish_new_events(resumed_state, published_event_ids)
+        return await self._run_and_archive(
+            resumed_state,
+            replace_checkpoint=True,
+            published_event_ids=published_event_ids,
+        )
 
     async def _run_and_archive(
         self,
         state: DiagnosisState,
         *,
         replace_checkpoint: bool,
+        published_event_ids: set[UUID] | None = None,
     ) -> DiagnosisState:
         """在剩余墙钟时间内运行图，并归档最后一个可恢复状态。"""
         started_at = time.monotonic()
         latest_state = state
+        observed_event_ids = published_event_ids or {
+            event.event_id for event in state["trajectory"]
+        }
         remaining_seconds = state["budget"].remaining_runtime_seconds
 
         try:
@@ -267,6 +283,7 @@ class HarnessLoop:
             async with asyncio.timeout(remaining_seconds):
                 async for graph_state in self._graph.astream(state, stream_mode="values"):
                     latest_state = cast(DiagnosisState, graph_state)
+                    self._publish_new_events(latest_state, observed_event_ids)
         except TimeoutError:
             timeout_reason = "本次运行超过时间预算。"
             timeout_event = self._new_event(
@@ -303,7 +320,9 @@ class HarnessLoop:
                 },
             )
 
-        return self._archive_state(latest_state, replace_checkpoint=replace_checkpoint)
+        archived_state = self._archive_state(latest_state, replace_checkpoint=replace_checkpoint)
+        self._publish_new_events(archived_state, observed_event_ids)
+        return archived_state
 
     def _archive_state(
         self,
@@ -354,11 +373,14 @@ class HarnessLoop:
     ) -> DiagnosisState:
         """恢复待审批 checkpoint 并返回已记录审批决议的状态。"""
         state = self.restore_checkpoint(run_id)
+        published_event_ids = {event.event_id for event in state["trajectory"]}
         updates = self._approval_resolver.resolve(state=state, command=command)
         resolved_state = cast(DiagnosisState, {**state, **updates})
 
         # 审批决议本身也必须成为可恢复 checkpoint。
-        return self._archive_state(resolved_state, replace_checkpoint=True)
+        archived_state = self._archive_state(resolved_state, replace_checkpoint=True)
+        self._publish_new_events(archived_state, published_event_ids)
+        return archived_state
 
     def _build_graph(
         self,
@@ -1526,3 +1548,25 @@ class HarnessLoop:
             latency_ms=latency_ms,
             token_usage=token_usage,
         )
+
+    def _publish_new_events(
+        self,
+        state: DiagnosisState,
+        published_event_ids: set[UUID],
+    ) -> None:
+        """按轨迹顺序发布尚未提交给观察器的事件。"""
+        for event in state["trajectory"]:
+            if event.event_id in published_event_ids:
+                continue
+            published_event_ids.add(event.event_id)
+            self._notify_event_observer(event)
+
+    def _notify_event_observer(self, event: AgentEvent) -> None:
+        """尽力通知观察器，发布失败不得改变 Harness 的运行结果。"""
+        if self._event_observer is None:
+            return
+
+        try:
+            self._event_observer.on_event(event.model_copy(deep=True))
+        except Exception:
+            logger.warning("harness event observer failed", exc_info=True)
