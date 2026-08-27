@@ -40,8 +40,14 @@ class Settings(BaseSettings):
     # 模型供应商配置保持可选，避免健康检查依赖真实密钥。
     llm_provider: str | None = None
     llm_model: str | None = None
+    # 通用字段供后续提供器复用；专用字段优先级更高。
+    llm_api_key: SecretStr | None = None
+    llm_base_url: AnyHttpUrl | None = None
+
     openai_api_key: SecretStr | None = None
     openai_base_url: AnyHttpUrl | None = None
+    anthropic_api_key: SecretStr | None = None
+    anthropic_base_url: AnyHttpUrl | None = None
 
     # LangSmith 默认关闭；后续评测阶段再按配置启用。
     langsmith_tracing: bool = False
@@ -51,8 +57,12 @@ class Settings(BaseSettings):
     @field_validator(
         "llm_provider",
         "llm_model",
+        "llm_api_key",
+        "llm_base_url",
         "openai_api_key",
         "openai_base_url",
+        "anthropic_api_key",
+        "anthropic_base_url",
         "langsmith_api_key",
         mode="before",
     )
