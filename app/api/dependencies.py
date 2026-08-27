@@ -2,8 +2,9 @@
 
 from typing import cast
 
-from fastapi import Request
+from fastapi import HTTPException, Request, status
 
+from app.diagnosis.runner import DiagnosisRunner
 from app.tools.registry import ToolRegistry
 from app.tools.scenarios import ScenarioStore
 
@@ -18,3 +19,14 @@ def get_tool_registry(request: Request) -> ToolRegistry:
     """从应用状态读取与场景存储绑定的只读工具注册表。"""
     # 诊断运行路由将通过该依赖取得可执行工具，不自行创建注册表。
     return cast(ToolRegistry, request.app.state.tool_registry)
+
+
+def get_diagnosis_runner(request: Request) -> DiagnosisRunner:
+    """返回应用装配的诊断运行器，未配置时拒绝创建运行。"""
+    runner = getattr(request.app.state, "diagnosis_runner", None)
+    if runner is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="diagnosis runtime is not configured",
+        )
+    return cast(DiagnosisRunner, runner)
