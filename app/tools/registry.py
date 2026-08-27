@@ -42,6 +42,8 @@ class ToolRegistry:
             ToolPolicy(
                 name=definition.name,
                 risk_level=definition.risk_level,
+                read_only=definition.read_only,
+                requires_approval=definition.requires_approval,
                 required_args=definition.required_args,
                 allowed_args=definition.allowed_args,
                 # 将工具定义中的单工具预算投影到策略层。

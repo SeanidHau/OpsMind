@@ -204,6 +204,8 @@ class ToolDefinition(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=1_000)
     risk_level: ToolRiskLevel
+    read_only: bool = False
+    requires_approval: bool = False
     required_args: tuple[str, ...] = ()
     allowed_args: tuple[str, ...] = ()
     # 工具定义是单工具预算配置的唯一来源。
