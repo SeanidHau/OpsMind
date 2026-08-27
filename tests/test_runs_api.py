@@ -323,6 +323,79 @@ def test_run_trajectory_endpoint_returns_not_found_for_unknown_run() -> None:
     assert response.json() == {"detail": "run not found"}
 
 
+def test_run_events_endpoint_streams_safe_cached_events_as_sse() -> None:
+    """SSE 回放按轨迹顺序发送安全事件和结束标记。"""
+    run_id = uuid4()
+    runner = ReplayDiagnosisRunner(
+        ReplayResult(
+            source_run_id=run_id,
+            mode=ReplayMode.CACHED,
+            terminal_status=HarnessStatus.COMPLETED,
+            final_state={
+                "step_count": 1,
+                "final_answer": "诊断已完成。",
+                "pending_question": None,
+                "errors": [],
+            },
+            trajectory=[
+                AgentEvent(
+                    run_id=run_id,
+                    step_id=1,
+                    event_type=EventType.TOOL_FINISHED,
+                    node="execute_tool",
+                    action=AgentAction(
+                        action_type=ActionType.CALL_TOOL,
+                        intent="读取服务状态。",
+                        tool_name="get_service_status",
+                        tool_args={"api_key": "secret"},
+                        reason="需要确认服务健康状态。",
+                    ),
+                    observation={"credentials": "secret", "status": "healthy"},
+                )
+            ],
+        )
+    )
+
+    with TestClient(create_app(diagnosis_runner=runner)) as client:
+        response = client.get(f"/api/v1/runs/{run_id}/events")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text.count("event: trajectory_event") == 1
+    assert response.text.count("event: stream_completed") == 1
+    assert '"event_type": "tool_finished"' in response.text
+    assert '"tool_name": "get_service_status"' in response.text
+    assert '"event_count": 1' in response.text
+    assert "api_key" not in response.text
+    assert "credentials" not in response.text
+    assert runner.read_run_ids == [run_id]
+    assert runner.calls == []
+
+
+def test_run_events_endpoint_returns_not_found_for_unknown_run() -> None:
+    """未知运行的 SSE 查询必须在建立事件流前返回 404。"""
+    runner = ReplayDiagnosisRunner(
+        ReplayResult(
+            source_run_id=uuid4(),
+            mode=ReplayMode.CACHED,
+            terminal_status=HarnessStatus.BLOCKED,
+            final_state={
+                "step_count": 0,
+                "final_answer": None,
+                "pending_question": None,
+                "errors": ["blocked"],
+            },
+            trajectory=[],
+        )
+    )
+
+    with TestClient(create_app(diagnosis_runner=runner)) as client:
+        response = client.get(f"/api/v1/runs/{uuid4()}/events")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "run not found"}
+
+
 def test_run_input_endpoint_resumes_the_same_run() -> None:
     """用户回答必须交给续跑接口，并保持原始运行 ID。"""
     runner = ResumableDiagnosisRunner()

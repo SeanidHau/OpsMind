@@ -1,10 +1,12 @@
 """诊断运行的同步 HTTP 入口。"""
 
-from collections.abc import Mapping
+import json
+from collections.abc import Iterator, Mapping
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 
 from app.api.dependencies import (
     get_approved_diagnosis_run_resumer,
@@ -70,6 +72,27 @@ def trajectory_response(replay: ReplayResult) -> DiagnosisRunTrajectoryResponse:
         status=replay.terminal_status,
         event_count=len(events),
         events=events,
+    )
+
+
+def sse_event(*, event: str, data: Mapping[str, Any]) -> str:
+    """编码一条 Server-Sent Event，供浏览器按事件类型消费。"""
+    return f"event: {event}\\ndata: {json.dumps(data, ensure_ascii=False)}\\n\\n"
+
+
+def trajectory_sse_stream(replay: ReplayResult) -> Iterator[str]:
+    """按归档顺序输出安全事件，最后写入流完成事件。"""
+    for event in replay.trajectory:
+        payload = trajectory_event_response(event).model_dump(mode="json")
+        yield sse_event(event="trajectory_event", data=payload)
+
+    yield sse_event(
+        event="stream_completed",
+        data={
+            "run_id": str(replay.source_run_id),
+            "event_count": len(replay.trajectory),
+            "status": replay.terminal_status,
+        },
     )
 
 
@@ -231,3 +254,31 @@ async def get_diagnosis_run_trajectory(
         ) from error
 
     return trajectory_response(replay)
+
+
+@router.get(
+    "/runs/{run_id}/events",
+    status_code=status.HTTP_200_OK,
+    summary="以 SSE 回放已归档诊断运行事件",
+)
+async def stream_diagnosis_run_events(
+    run_id: UUID,
+    diagnosis_run_reader: Annotated[DiagnosisRunReader, Depends(get_diagnosis_run_reader)],
+) -> StreamingResponse:
+    """流式返回缓存的安全轨迹，不重新执行模型、工具或 Harness 节点。"""
+    try:
+        replay = diagnosis_run_reader.get_run(run_id)
+    except KeyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="run not found",
+        ) from error
+
+    return StreamingResponse(
+        trajectory_sse_stream(replay),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
