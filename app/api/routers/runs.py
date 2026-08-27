@@ -256,6 +256,28 @@ async def get_diagnosis_run_trajectory(
     return trajectory_response(replay)
 
 
+@router.post(
+    "/runs/{run_id}/replay",
+    response_model=DiagnosisRunTrajectoryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="回放已归档诊断运行",
+)
+async def replay_diagnosis_run(
+    run_id: UUID,
+    diagnosis_run_reader: Annotated[DiagnosisRunReader, Depends(get_diagnosis_run_reader)],
+) -> DiagnosisRunTrajectoryResponse:
+    """返回一份独立的安全轨迹副本，不重新运行诊断。"""
+    try:
+        replay = diagnosis_run_reader.get_run(run_id)
+    except KeyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="run not found",
+        ) from error
+
+    return trajectory_response(replay)
+
+
 @router.get(
     "/runs/{run_id}/events",
     status_code=status.HTTP_200_OK,

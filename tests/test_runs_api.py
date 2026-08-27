@@ -323,6 +323,67 @@ def test_run_trajectory_endpoint_returns_not_found_for_unknown_run() -> None:
     assert response.json() == {"detail": "run not found"}
 
 
+def test_run_replay_endpoint_returns_cached_trajectory_without_starting_a_run() -> None:
+    """显式回放只能读取快照，不得再次进入诊断运行。"""
+    run_id = uuid4()
+    runner = ReplayDiagnosisRunner(
+        ReplayResult(
+            source_run_id=run_id,
+            mode=ReplayMode.CACHED,
+            terminal_status=HarnessStatus.COMPLETED,
+            final_state={
+                "step_count": 1,
+                "final_answer": "诊断已完成。",
+                "pending_question": None,
+                "errors": [],
+            },
+            trajectory=[
+                AgentEvent(
+                    run_id=run_id,
+                    step_id=1,
+                    event_type=EventType.RUN_COMPLETED,
+                    node="finalize",
+                )
+            ],
+        )
+    )
+
+    with TestClient(create_app(diagnosis_runner=runner)) as client:
+        response = client.post(f"/api/v1/runs/{run_id}/replay")
+
+    assert response.status_code == 200
+    assert response.json()["run_id"] == str(run_id)
+    assert response.json()["mode"] == "cached"
+    assert response.json()["event_count"] == 1
+    assert response.json()["events"][0]["event_type"] == "run_completed"
+    assert runner.read_run_ids == [run_id]
+    assert runner.calls == []
+
+
+def test_run_replay_endpoint_returns_not_found_for_unknown_run() -> None:
+    """未知运行不能伪造回放结果。"""
+    runner = ReplayDiagnosisRunner(
+        ReplayResult(
+            source_run_id=uuid4(),
+            mode=ReplayMode.CACHED,
+            terminal_status=HarnessStatus.BLOCKED,
+            final_state={
+                "step_count": 0,
+                "final_answer": None,
+                "pending_question": None,
+                "errors": ["blocked"],
+            },
+            trajectory=[],
+        )
+    )
+
+    with TestClient(create_app(diagnosis_runner=runner)) as client:
+        response = client.post(f"/api/v1/runs/{uuid4()}/replay")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "run not found"}
+
+
 def test_run_events_endpoint_streams_safe_cached_events_as_sse() -> None:
     """SSE 回放按轨迹顺序发送安全事件和结束标记。"""
     run_id = uuid4()
