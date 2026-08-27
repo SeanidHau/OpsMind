@@ -8,6 +8,7 @@ from app.api.routers.system import router as system_router
 from app.api.version import API_VERSION
 from app.config import AppEnvironment, Settings, get_settings
 from app.observability.logging import configure_logging
+from app.scenarios.defaults import create_default_scenario_store
 from app.tools.scenarios import ScenarioStore
 
 
@@ -31,7 +32,7 @@ def create_app(
     # 保存解析后的配置；路由层不应自行读取环境变量。
     app.state.settings = resolved_settings
 
-    app.state.scenario_store = scenario_store or ScenarioStore(())
+    app.state.scenario_store = scenario_store or create_default_scenario_store()
 
     app.add_middleware(RequestContextMiddleware)
 
