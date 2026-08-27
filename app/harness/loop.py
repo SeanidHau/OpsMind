@@ -192,9 +192,18 @@ class HarnessLoop:
         self._approval_resolver = ApprovalResolver()
         self._graph = self._build_graph()
 
-    async def run(self, state: DiagnosisState) -> DiagnosisState:
+    async def run(
+        self,
+        state: DiagnosisState,
+        *,
+        event_observer: HarnessEventObserver | None = None,
+    ) -> DiagnosisState:
         """运行新任务图，累计墙钟时间预算并保存首次 checkpoint。"""
-        return await self._run_and_archive(state, replace_checkpoint=False)
+        return await self._run_and_archive(
+            state,
+            replace_checkpoint=False,
+            event_observer=event_observer or self._event_observer,
+        )
 
     async def resume_approved(self, run_id: UUID) -> DiagnosisState:
         """从已批准 checkpoint 续跑，累计剩余墙钟时间并替换最新快照。"""
@@ -209,7 +218,11 @@ class HarnessLoop:
         if state.get("terminal_status") is not None:
             raise ValueError("approved run must not have a terminal status")
 
-        return await self._run_and_archive(state, replace_checkpoint=True)
+        return await self._run_and_archive(
+            state,
+            replace_checkpoint=True,
+            event_observer=self._event_observer,
+        )
 
     async def resume_with_user_input(
         self,
@@ -256,11 +269,12 @@ class HarnessLoop:
                 "trajectory": [*state["trajectory"], resumed_event],
             },
         )
-        self._publish_new_events(resumed_state, published_event_ids)
+        self._publish_new_events(resumed_state, published_event_ids, self._event_observer)
         return await self._run_and_archive(
             resumed_state,
             replace_checkpoint=True,
             published_event_ids=published_event_ids,
+            event_observer=self._event_observer,
         )
 
     async def _run_and_archive(
@@ -269,6 +283,7 @@ class HarnessLoop:
         *,
         replace_checkpoint: bool,
         published_event_ids: set[UUID] | None = None,
+        event_observer: HarnessEventObserver | None,
     ) -> DiagnosisState:
         """在剩余墙钟时间内运行图，并归档最后一个可恢复状态。"""
         started_at = time.monotonic()
@@ -283,7 +298,7 @@ class HarnessLoop:
             async with asyncio.timeout(remaining_seconds):
                 async for graph_state in self._graph.astream(state, stream_mode="values"):
                     latest_state = cast(DiagnosisState, graph_state)
-                    self._publish_new_events(latest_state, observed_event_ids)
+                    self._publish_new_events(latest_state, observed_event_ids, event_observer)
         except TimeoutError:
             timeout_reason = "本次运行超过时间预算。"
             timeout_event = self._new_event(
@@ -321,7 +336,7 @@ class HarnessLoop:
             )
 
         archived_state = self._archive_state(latest_state, replace_checkpoint=replace_checkpoint)
-        self._publish_new_events(archived_state, observed_event_ids)
+        self._publish_new_events(archived_state, observed_event_ids, event_observer)
         return archived_state
 
     def _archive_state(
@@ -379,7 +394,7 @@ class HarnessLoop:
 
         # 审批决议本身也必须成为可恢复 checkpoint。
         archived_state = self._archive_state(resolved_state, replace_checkpoint=True)
-        self._publish_new_events(archived_state, published_event_ids)
+        self._publish_new_events(archived_state, published_event_ids, self._event_observer)
         return archived_state
 
     def _build_graph(
@@ -1553,20 +1568,25 @@ class HarnessLoop:
         self,
         state: DiagnosisState,
         published_event_ids: set[UUID],
+        event_observer: HarnessEventObserver | None,
     ) -> None:
         """按轨迹顺序发布尚未提交给观察器的事件。"""
         for event in state["trajectory"]:
             if event.event_id in published_event_ids:
                 continue
             published_event_ids.add(event.event_id)
-            self._notify_event_observer(event)
+            self._notify_event_observer(event, event_observer)
 
-    def _notify_event_observer(self, event: AgentEvent) -> None:
+    @staticmethod
+    def _notify_event_observer(
+        event: AgentEvent,
+        event_observer: HarnessEventObserver | None,
+    ) -> None:
         """尽力通知观察器，发布失败不得改变 Harness 的运行结果。"""
-        if self._event_observer is None:
+        if event_observer is None:
             return
 
         try:
-            self._event_observer.on_event(event.model_copy(deep=True))
+            event_observer.on_event(event.model_copy(deep=True))
         except Exception:
             logger.warning("harness event observer failed", exc_info=True)

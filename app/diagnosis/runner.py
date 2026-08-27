@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
 
+from app.harness.events import HarnessEventObserver
 from app.harness.loop import HarnessLoop, create_initial_state
 from app.models.contracts import ApprovalCommand, BudgetState, DiagnosisState, ReplayResult
 
@@ -34,6 +35,21 @@ class DiagnosisRunResumer(Protocol):
 
     async def resume_with_user_input(self, run_id: UUID, answer: str) -> DiagnosisState:
         """写入用户回答，并从已归档 checkpoint 继续运行。"""
+
+
+class StreamingDiagnosisRunner(Protocol):
+    """运行新诊断并将执行中事件交给请求专属观察器。"""
+
+    async def run_with_event_observer(
+        self,
+        *,
+        session_id: str,
+        thread_id: str,
+        user_query: str,
+        run_id: UUID,
+        event_observer: HarnessEventObserver,
+    ) -> DiagnosisState:
+        """使用指定运行 ID 执行诊断，并发布已提交的轨迹事件。"""
 
 
 class DiagnosisApprovalResolver(Protocol):
@@ -86,6 +102,26 @@ class HarnessDiagnosisRunner:
             budget=self._budget_template.model_copy(deep=True),
         )
         return await self._harness_loop.run(initial_state)
+
+    async def run_with_event_observer(
+        self,
+        *,
+        session_id: str,
+        thread_id: str,
+        user_query: str,
+        run_id: UUID,
+        event_observer: HarnessEventObserver,
+    ) -> DiagnosisState:
+        """为事件流创建指定运行 ID 的独立状态并委托给 Harness。"""
+        initial_state = create_initial_state(
+            session_id=session_id,
+            thread_id=thread_id,
+            user_query=user_query,
+            # 深拷贝避免一次运行累计的消耗影响下一次运行。
+            budget=self._budget_template.model_copy(deep=True),
+            run_id=run_id,
+        )
+        return await self._harness_loop.run(initial_state, event_observer=event_observer)
 
     def get_run(self, run_id: UUID) -> ReplayResult:
         """读取 Harness 缓存的运行快照，不触发新的诊断执行。"""

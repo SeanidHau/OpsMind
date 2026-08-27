@@ -10,6 +10,7 @@ from app.diagnosis.runner import (
     DiagnosisRunner,
     DiagnosisRunReader,
     DiagnosisRunResumer,
+    StreamingDiagnosisRunner,
 )
 from app.tools.registry import ToolRegistry
 from app.tools.scenarios import ScenarioStore
@@ -58,6 +59,17 @@ def get_diagnosis_run_resumer(request: Request) -> DiagnosisRunResumer:
             detail="diagnosis run resumer is not configured",
         )
     return cast(DiagnosisRunResumer, runner)
+
+
+def get_streaming_diagnosis_runner(request: Request) -> StreamingDiagnosisRunner:
+    """返回实时事件流运行接口；未配置时拒绝建立 SSE。"""
+    runner = getattr(request.app.state, "diagnosis_runner", None)
+    if runner is None or not callable(getattr(runner, "run_with_event_observer", None)):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="streaming diagnosis runtime is not configured",
+        )
+    return cast(StreamingDiagnosisRunner, runner)
 
 
 def get_diagnosis_approval_resolver(request: Request) -> DiagnosisApprovalResolver:

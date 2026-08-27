@@ -1,9 +1,11 @@
-"""诊断运行的同步 HTTP 入口。"""
+"""诊断运行的 HTTP 入口。"""
 
+import asyncio
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping
+from contextlib import suppress
 from typing import Annotated, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -14,6 +16,7 @@ from app.api.dependencies import (
     get_diagnosis_run_reader,
     get_diagnosis_run_resumer,
     get_diagnosis_runner,
+    get_streaming_diagnosis_runner,
 )
 from app.api.schemas.runs import (
     CreateDiagnosisRunRequest,
@@ -22,14 +25,16 @@ from app.api.schemas.runs import (
     DiagnosisTrajectoryEventResponse,
     ResumeDiagnosisRunRequest,
 )
+from app.api.streaming import QueueEventObserver
 from app.diagnosis.runner import (
     ApprovedDiagnosisRunResumer,
     DiagnosisApprovalResolver,
     DiagnosisRunner,
     DiagnosisRunReader,
     DiagnosisRunResumer,
+    StreamingDiagnosisRunner,
 )
-from app.models.contracts import AgentEvent, ApprovalCommand, ReplayResult
+from app.models.contracts import AgentEvent, ApprovalCommand, DiagnosisState, ReplayResult
 
 router = APIRouter(prefix="/api/v1", tags=["runs"])
 
@@ -96,6 +101,61 @@ def trajectory_sse_stream(replay: ReplayResult) -> Iterator[str]:
     )
 
 
+async def live_run_sse_stream(
+    *,
+    payload: CreateDiagnosisRunRequest,
+    run_id: UUID,
+    diagnosis_runner: StreamingDiagnosisRunner,
+) -> AsyncIterator[str]:
+    """运行诊断并在节点提交后持续输出安全事件。"""
+    event_queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
+    event_observer = QueueEventObserver(event_queue)
+
+    async def run_diagnosis() -> DiagnosisState:
+        try:
+            return await diagnosis_runner.run_with_event_observer(
+                session_id=payload.session_id,
+                thread_id=payload.thread_id,
+                user_query=payload.user_query,
+                run_id=run_id,
+                event_observer=event_observer,
+            )
+        finally:
+            event_queue.put_nowait(None)
+
+    run_task = asyncio.create_task(run_diagnosis())
+    yield sse_event(event="run_started", data={"run_id": str(run_id)})
+
+    try:
+        while True:
+            event = await event_queue.get()
+            if event is None:
+                break
+            yield sse_event(
+                event=event.event_type.value,
+                data=trajectory_event_response(event).model_dump(mode="json"),
+            )
+
+        result = await run_task
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        yield sse_event(
+            event="run_failed",
+            data={"run_id": str(run_id), "error": "diagnosis run failed"},
+        )
+    else:
+        yield sse_event(
+            event="run_finished",
+            data=response_from_state(result).model_dump(mode="json"),
+        )
+    finally:
+        if not run_task.done():
+            run_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await run_task
+
+
 @router.post(
     "/runs",
     response_model=DiagnosisRunResponse,
@@ -113,6 +173,33 @@ async def create_diagnosis_run(
         user_query=payload.user_query,
     )
     return response_from_state(result)
+
+
+@router.post(
+    "/runs/stream",
+    status_code=status.HTTP_200_OK,
+    summary="创建诊断运行并以 SSE 返回执行中事件",
+)
+async def stream_diagnosis_run(
+    payload: CreateDiagnosisRunRequest,
+    diagnosis_runner: Annotated[
+        StreamingDiagnosisRunner,
+        Depends(get_streaming_diagnosis_runner),
+    ],
+) -> StreamingResponse:
+    """建立请求专属事件流，运行完成或失败后关闭连接。"""
+    return StreamingResponse(
+        live_run_sse_stream(
+            payload=payload,
+            run_id=uuid4(),
+            diagnosis_runner=diagnosis_runner,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post(

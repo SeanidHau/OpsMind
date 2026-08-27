@@ -140,6 +140,58 @@ class ApprovalDiagnosisRunner(RecordingDiagnosisRunner):
         return state
 
 
+class StreamingDiagnosisRunner(RecordingDiagnosisRunner):
+    """模拟在运行中发布事件的诊断运行器。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.streaming_calls: list[tuple[UUID, dict[str, str]]] = []
+
+    async def run_with_event_observer(
+        self,
+        *,
+        session_id: str,
+        thread_id: str,
+        user_query: str,
+        run_id: UUID,
+        event_observer: object,
+    ) -> DiagnosisState:
+        """发布一条含敏感原始参数的事件，验证 API 进行安全投影。"""
+        self.streaming_calls.append(
+            (
+                run_id,
+                {
+                    "session_id": session_id,
+                    "thread_id": thread_id,
+                    "user_query": user_query,
+                },
+            )
+        )
+        event_observer.on_event(  # type: ignore[attr-defined]
+            AgentEvent(
+                run_id=run_id,
+                step_id=1,
+                event_type=EventType.TOOL_FINISHED,
+                node="execute_tool",
+                action=AgentAction(
+                    action_type=ActionType.CALL_TOOL,
+                    intent="读取服务状态。",
+                    tool_name="get_service_status",
+                    tool_args={"api_key": "secret"},
+                    reason="需要确认服务健康状态。",
+                ),
+                observation={"credentials": "secret"},
+            )
+        )
+        state = await self.run(
+            session_id=session_id,
+            thread_id=thread_id,
+            user_query=user_query,
+        )
+        state["run_id"] = str(run_id)
+        return state
+
+
 def create_payload() -> dict[str, str]:
     """返回一个合法的创建运行请求。"""
     return {
@@ -175,6 +227,34 @@ def test_runs_endpoint_delegates_to_injected_diagnosis_runner() -> None:
         "errors": [],
     }
     assert runner.calls == [create_payload()]
+
+
+def test_run_stream_endpoint_emits_live_safe_events_and_final_summary() -> None:
+    """运行中 SSE 应先返回运行 ID，再返回安全事件和最终摘要。"""
+    runner = StreamingDiagnosisRunner()
+
+    with TestClient(create_app(diagnosis_runner=runner)) as client:
+        response = client.post("/api/v1/runs/stream", json=create_payload())
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text.count("event: run_started") == 1
+    assert response.text.count("event: tool_finished") == 1
+    assert response.text.count("event: run_finished") == 1
+    assert '"tool_name": "get_service_status"' in response.text
+    assert '"final_answer": "诊断已完成。"' in response.text
+    assert "api_key" not in response.text
+    assert "credentials" not in response.text
+    assert runner.streaming_calls[0][1] == create_payload()
+
+
+def test_run_stream_endpoint_returns_service_unavailable_without_streaming_runner() -> None:
+    """不支持请求专属观察器的运行器不能建立实时事件流。"""
+    with TestClient(create_app(diagnosis_runner=RecordingDiagnosisRunner())) as client:
+        response = client.post("/api/v1/runs/stream", json=create_payload())
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "streaming diagnosis runtime is not configured"}
 
 
 def test_run_query_endpoint_returns_cached_result_without_starting_a_run() -> None:
