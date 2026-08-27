@@ -4,7 +4,7 @@ OpsMind 是一个面向长流程任务的 Agent Harness 项目，使用运维故
 
 ## 当前阶段
 
-Harness Core：已完成共享契约、预算与动作策略、LangGraph Harness Loop，以及 Progress Verifier 的停滞控制。下一阶段接入 Context Manager、RAG 和模拟诊断工具。
+已完成受控 Harness、RAG 与模拟工具、审批与续跑、运行回放、实时 SSE 和 Streamlit 工作台。PostgreSQL 持久化将在异步归档链路完成后接入。
 
 ## 技术栈
 
@@ -48,6 +48,22 @@ Harness Core：已完成共享契约、预算与动作策略、LangGraph Harness
    uv run mypy app
    docker compose config
    ```
+
+### 启动工作台
+
+先启动 FastAPI 服务。配置模型供应商后，工作台才能创建真实诊断运行。
+
+```bash
+uv run uvicorn app.api.main:app --reload
+```
+
+在另一个终端启动 Streamlit。
+
+```bash
+uv run streamlit run frontend/app.py
+```
+
+工作台默认连接 `http://127.0.0.1:8000`。侧边栏可修改 API 地址。工作台通过 `POST /api/v1/runs/stream` 接收安全 SSE 事件，不展示工具参数或原始工具观察结果。
 
 ## 项目文档
 
