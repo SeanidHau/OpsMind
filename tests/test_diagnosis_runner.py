@@ -1,5 +1,7 @@
 """Harness 诊断运行服务的隔离与预算测试。"""
 
+from uuid import UUID
+
 import pytest
 
 from app.diagnosis.runner import HarnessDiagnosisRunner
@@ -11,11 +13,17 @@ class RecordingHarnessLoop:
 
     def __init__(self) -> None:
         self.states: list[DiagnosisState] = []
+        self.resume_calls: list[tuple[UUID, str]] = []
 
     async def run(self, state: DiagnosisState) -> DiagnosisState:
         """保存状态，并原样返回以便检查。"""
         self.states.append(state)
         return state
+
+    async def resume_with_user_input(self, run_id: UUID, answer: str) -> DiagnosisState:
+        """记录续跑请求，并返回对应的已保存状态。"""
+        self.resume_calls.append((run_id, answer))
+        return self.states[0]
 
 
 def budget_template() -> BudgetState:
@@ -46,6 +54,22 @@ async def test_harness_runner_creates_isolated_initial_state_and_budget() -> Non
     assert first["budget"] is not second["budget"]
     assert first["budget"] == budget_template()
     assert harness_loop.states == [first, second]
+
+
+@pytest.mark.asyncio
+async def test_harness_runner_delegates_user_input_resume_to_harness() -> None:
+    """运行服务不解释用户回答，只将其交给 Harness 恢复 checkpoint。"""
+    harness_loop = RecordingHarnessLoop()
+    runner = HarnessDiagnosisRunner(
+        harness_loop=harness_loop,  # type: ignore[arg-type]
+        budget_template=budget_template(),
+    )
+    state = await runner.run(session_id="session-1", thread_id="thread-1", user_query="first")
+
+    result = await runner.resume_with_user_input(UUID(state["run_id"]), "数据库连接数已达到上限")
+
+    assert result is state
+    assert harness_loop.resume_calls == [(UUID(state["run_id"]), "数据库连接数已达到上限")]
 
 
 def test_harness_runner_rejects_consumed_budget_template() -> None:

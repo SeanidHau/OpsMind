@@ -29,6 +29,13 @@ class DiagnosisRunReader(Protocol):
         """返回缓存快照，不重新执行模型、工具或图节点。"""
 
 
+class DiagnosisRunResumer(Protocol):
+    """向等待输入的诊断运行提交用户回答。"""
+
+    async def resume_with_user_input(self, run_id: UUID, answer: str) -> DiagnosisState:
+        """写入用户回答，并从已归档 checkpoint 继续运行。"""
+
+
 class HarnessDiagnosisRunner:
     """使用固定预算模板创建新状态并委托给 Harness Loop。"""
 
@@ -69,3 +76,7 @@ class HarnessDiagnosisRunner:
     def get_run(self, run_id: UUID) -> ReplayResult:
         """读取 Harness 缓存的运行快照，不触发新的诊断执行。"""
         return self._harness_loop.replay_cached(run_id)
+
+    async def resume_with_user_input(self, run_id: UUID, answer: str) -> DiagnosisState:
+        """将用户回答交给 Harness，从等待输入 checkpoint 续跑。"""
+        return await self._harness_loop.resume_with_user_input(run_id, answer)

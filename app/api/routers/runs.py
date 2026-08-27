@@ -1,15 +1,36 @@
 """诊断运行的同步 HTTP 入口。"""
 
-from typing import Annotated
+from collections.abc import Mapping
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.dependencies import get_diagnosis_run_reader, get_diagnosis_runner
-from app.api.schemas.runs import CreateDiagnosisRunRequest, DiagnosisRunResponse
-from app.diagnosis.runner import DiagnosisRunner, DiagnosisRunReader
+from app.api.dependencies import (
+    get_diagnosis_run_reader,
+    get_diagnosis_run_resumer,
+    get_diagnosis_runner,
+)
+from app.api.schemas.runs import (
+    CreateDiagnosisRunRequest,
+    DiagnosisRunResponse,
+    ResumeDiagnosisRunRequest,
+)
+from app.diagnosis.runner import DiagnosisRunner, DiagnosisRunReader, DiagnosisRunResumer
 
 router = APIRouter(prefix="/api/v1", tags=["runs"])
+
+
+def response_from_state(result: Mapping[str, Any]) -> DiagnosisRunResponse:
+    """将 Harness 状态投影为不会泄露内部上下文的 HTTP 摘要。"""
+    return DiagnosisRunResponse(
+        run_id=UUID(str(result["run_id"])),
+        status=result.get("terminal_status"),
+        step_count=int(result["step_count"]),
+        final_answer=result.get("final_answer"),
+        pending_question=result.get("pending_question"),
+        errors=list(result["errors"]),
+    )
 
 
 @router.post(
@@ -28,14 +49,35 @@ async def create_diagnosis_run(
         thread_id=payload.thread_id,
         user_query=payload.user_query,
     )
-    return DiagnosisRunResponse(
-        run_id=UUID(result["run_id"]),
-        status=result.get("terminal_status"),
-        step_count=result["step_count"],
-        final_answer=result.get("final_answer"),
-        pending_question=result.get("pending_question"),
-        errors=result["errors"],
-    )
+    return response_from_state(result)
+
+
+@router.post(
+    "/runs/{run_id}/input",
+    response_model=DiagnosisRunResponse,
+    status_code=status.HTTP_200_OK,
+    summary="提交用户回答并续跑诊断",
+)
+async def resume_diagnosis_run_with_user_input(
+    run_id: UUID,
+    payload: ResumeDiagnosisRunRequest,
+    diagnosis_run_resumer: Annotated[DiagnosisRunResumer, Depends(get_diagnosis_run_resumer)],
+) -> DiagnosisRunResponse:
+    """仅恢复等待用户输入的快照，不创建新的诊断运行。"""
+    try:
+        result = await diagnosis_run_resumer.resume_with_user_input(run_id, payload.answer)
+    except KeyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="run not found",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="run cannot accept user input",
+        ) from error
+
+    return response_from_state(result)
 
 
 @router.get(

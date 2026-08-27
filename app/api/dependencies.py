@@ -4,7 +4,7 @@ from typing import cast
 
 from fastapi import HTTPException, Request, status
 
-from app.diagnosis.runner import DiagnosisRunner, DiagnosisRunReader
+from app.diagnosis.runner import DiagnosisRunner, DiagnosisRunReader, DiagnosisRunResumer
 from app.tools.registry import ToolRegistry
 from app.tools.scenarios import ScenarioStore
 
@@ -41,3 +41,14 @@ def get_diagnosis_run_reader(request: Request) -> DiagnosisRunReader:
             detail="diagnosis run reader is not configured",
         )
     return cast(DiagnosisRunReader, runner)
+
+
+def get_diagnosis_run_resumer(request: Request) -> DiagnosisRunResumer:
+    """返回用户输入续跑接口；未配置时拒绝恢复运行。"""
+    runner = getattr(request.app.state, "diagnosis_runner", None)
+    if runner is None or not callable(getattr(runner, "resume_with_user_input", None)):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="diagnosis run resumer is not configured",
+        )
+    return cast(DiagnosisRunResumer, runner)

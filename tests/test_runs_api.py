@@ -71,6 +71,28 @@ class ReplayDiagnosisRunner(RecordingDiagnosisRunner):
         return self.replay
 
 
+class ResumableDiagnosisRunner(RecordingDiagnosisRunner):
+    """记录用户回答，并返回固定的续跑完成状态。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.resume_calls: list[tuple[UUID, str]] = []
+
+    async def resume_with_user_input(self, run_id: UUID, answer: str) -> DiagnosisState:
+        """模拟恢复等待用户输入的同一运行。"""
+        self.resume_calls.append((run_id, answer))
+        state = await self.run(
+            session_id="session-resume",
+            thread_id="thread-resume",
+            user_query="恢复诊断",
+        )
+        state["run_id"] = str(run_id)
+        state["terminal_status"] = HarnessStatus.COMPLETED
+        state["step_count"] = 3
+        state["final_answer"] = "已根据补充信息完成诊断。"
+        return state
+
+
 def create_payload() -> dict[str, str]:
     """返回一个合法的创建运行请求。"""
     return {
@@ -164,3 +186,41 @@ def test_run_query_endpoint_returns_not_found_for_unknown_run() -> None:
 
     assert response.status_code == 404
     assert response.json() == {"detail": "run not found"}
+
+
+def test_run_input_endpoint_resumes_the_same_run() -> None:
+    """用户回答必须交给续跑接口，并保持原始运行 ID。"""
+    runner = ResumableDiagnosisRunner()
+    run_id = uuid4()
+
+    with TestClient(create_app(diagnosis_runner=runner)) as client:
+        response = client.post(
+            f"/api/v1/runs/{run_id}/input",
+            json={"answer": "  数据库连接数已达到上限  "},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["run_id"] == str(run_id)
+    assert response.json()["status"] == "completed"
+    assert response.json()["final_answer"] == "已根据补充信息完成诊断。"
+    assert runner.resume_calls == [(run_id, "数据库连接数已达到上限")]
+
+
+def test_run_input_endpoint_rejects_blank_answer() -> None:
+    """空白回答必须在写入运行历史前被 API 参数校验拒绝。"""
+    with TestClient(create_app(diagnosis_runner=ResumableDiagnosisRunner())) as client:
+        response = client.post(f"/api/v1/runs/{uuid4()}/input", json={"answer": "   "})
+
+    assert response.status_code == 422
+
+
+def test_run_input_endpoint_returns_service_unavailable_without_resumer() -> None:
+    """仅支持新运行的注入对象不能被错误当作续跑器。"""
+    with TestClient(create_app(diagnosis_runner=RecordingDiagnosisRunner())) as client:
+        response = client.post(
+            f"/api/v1/runs/{uuid4()}/input",
+            json={"answer": "补充信息"},
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "diagnosis run resumer is not configured"}
