@@ -4,7 +4,13 @@ from typing import cast
 
 from fastapi import HTTPException, Request, status
 
-from app.diagnosis.runner import DiagnosisRunner, DiagnosisRunReader, DiagnosisRunResumer
+from app.diagnosis.runner import (
+    ApprovedDiagnosisRunResumer,
+    DiagnosisApprovalResolver,
+    DiagnosisRunner,
+    DiagnosisRunReader,
+    DiagnosisRunResumer,
+)
 from app.tools.registry import ToolRegistry
 from app.tools.scenarios import ScenarioStore
 
@@ -52,3 +58,25 @@ def get_diagnosis_run_resumer(request: Request) -> DiagnosisRunResumer:
             detail="diagnosis run resumer is not configured",
         )
     return cast(DiagnosisRunResumer, runner)
+
+
+def get_diagnosis_approval_resolver(request: Request) -> DiagnosisApprovalResolver:
+    """返回审批决议接口；未配置时拒绝记录审批。"""
+    runner = getattr(request.app.state, "diagnosis_runner", None)
+    if runner is None or not callable(getattr(runner, "resolve_approval", None)):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="diagnosis approval resolver is not configured",
+        )
+    return cast(DiagnosisApprovalResolver, runner)
+
+
+def get_approved_diagnosis_run_resumer(request: Request) -> ApprovedDiagnosisRunResumer:
+    """返回获批续跑接口；未配置时拒绝执行获批动作。"""
+    runner = getattr(request.app.state, "diagnosis_runner", None)
+    if runner is None or not callable(getattr(runner, "resume_approved", None)):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="approved diagnosis run resumer is not configured",
+        )
+    return cast(ApprovedDiagnosisRunResumer, runner)

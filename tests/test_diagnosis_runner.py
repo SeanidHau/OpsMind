@@ -5,7 +5,7 @@ from uuid import UUID
 import pytest
 
 from app.diagnosis.runner import HarnessDiagnosisRunner
-from app.models.contracts import BudgetState, DiagnosisState
+from app.models.contracts import ApprovalCommand, ApprovalDecision, BudgetState, DiagnosisState
 
 
 class RecordingHarnessLoop:
@@ -14,6 +14,8 @@ class RecordingHarnessLoop:
     def __init__(self) -> None:
         self.states: list[DiagnosisState] = []
         self.resume_calls: list[tuple[UUID, str]] = []
+        self.approval_calls: list[tuple[UUID, ApprovalCommand]] = []
+        self.approved_resume_calls: list[UUID] = []
 
     async def run(self, state: DiagnosisState) -> DiagnosisState:
         """保存状态，并原样返回以便检查。"""
@@ -23,6 +25,16 @@ class RecordingHarnessLoop:
     async def resume_with_user_input(self, run_id: UUID, answer: str) -> DiagnosisState:
         """记录续跑请求，并返回对应的已保存状态。"""
         self.resume_calls.append((run_id, answer))
+        return self.states[0]
+
+    def resolve_approval(self, *, run_id: UUID, command: ApprovalCommand) -> DiagnosisState:
+        """记录审批决议，并返回保存状态。"""
+        self.approval_calls.append((run_id, command))
+        return self.states[0]
+
+    async def resume_approved(self, run_id: UUID) -> DiagnosisState:
+        """记录获批续跑，并返回保存状态。"""
+        self.approved_resume_calls.append(run_id)
         return self.states[0]
 
 
@@ -70,6 +82,30 @@ async def test_harness_runner_delegates_user_input_resume_to_harness() -> None:
 
     assert result is state
     assert harness_loop.resume_calls == [(UUID(state["run_id"]), "数据库连接数已达到上限")]
+
+
+@pytest.mark.asyncio
+async def test_harness_runner_keeps_approval_and_execution_separate() -> None:
+    """记录审批决议不能隐式执行高风险动作。"""
+    harness_loop = RecordingHarnessLoop()
+    runner = HarnessDiagnosisRunner(
+        harness_loop=harness_loop,  # type: ignore[arg-type]
+        budget_template=budget_template(),
+    )
+    state = await runner.run(session_id="session-1", thread_id="thread-1", user_query="first")
+    run_id = UUID(state["run_id"])
+    command = ApprovalCommand(decision=ApprovalDecision.APPROVE, reason="维护窗口已确认。")
+
+    resolved = runner.resolve_approval(run_id=run_id, command=command)
+
+    assert resolved is state
+    assert harness_loop.approval_calls == [(run_id, command)]
+    assert harness_loop.approved_resume_calls == []
+
+    resumed = await runner.resume_approved(run_id)
+
+    assert resumed is state
+    assert harness_loop.approved_resume_calls == [run_id]
 
 
 def test_harness_runner_rejects_consumed_budget_template() -> None:

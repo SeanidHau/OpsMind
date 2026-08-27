@@ -6,7 +6,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.harness.loop import HarnessLoop, create_initial_state
-from app.models.contracts import BudgetState, DiagnosisState, ReplayResult
+from app.models.contracts import ApprovalCommand, BudgetState, DiagnosisState, ReplayResult
 
 
 class DiagnosisRunner(Protocol):
@@ -34,6 +34,20 @@ class DiagnosisRunResumer(Protocol):
 
     async def resume_with_user_input(self, run_id: UUID, answer: str) -> DiagnosisState:
         """写入用户回答，并从已归档 checkpoint 继续运行。"""
+
+
+class DiagnosisApprovalResolver(Protocol):
+    """记录等待审批运行的人工决议。"""
+
+    def resolve_approval(self, *, run_id: UUID, command: ApprovalCommand) -> DiagnosisState:
+        """保存决议，但不在本步骤执行获批动作。"""
+
+
+class ApprovedDiagnosisRunResumer(Protocol):
+    """续跑已经批准或编辑过动作的诊断运行。"""
+
+    async def resume_approved(self, run_id: UUID) -> DiagnosisState:
+        """从已保存的批准决议恢复同一运行。"""
 
 
 class HarnessDiagnosisRunner:
@@ -80,3 +94,11 @@ class HarnessDiagnosisRunner:
     async def resume_with_user_input(self, run_id: UUID, answer: str) -> DiagnosisState:
         """将用户回答交给 Harness，从等待输入 checkpoint 续跑。"""
         return await self._harness_loop.resume_with_user_input(run_id, answer)
+
+    def resolve_approval(self, *, run_id: UUID, command: ApprovalCommand) -> DiagnosisState:
+        """记录审批决议，不在决议步骤执行工具。"""
+        return self._harness_loop.resolve_approval(run_id=run_id, command=command)
+
+    async def resume_approved(self, run_id: UUID) -> DiagnosisState:
+        """从已批准 checkpoint 执行原始或编辑后的工具动作。"""
+        return await self._harness_loop.resume_approved(run_id)

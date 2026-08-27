@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 from app.api.main import create_app
 from app.harness.loop import create_initial_state
 from app.models.contracts import (
+    ApprovalCommand,
+    ApprovalDecision,
     BudgetState,
     DiagnosisState,
     HarnessStatus,
@@ -90,6 +92,47 @@ class ResumableDiagnosisRunner(RecordingDiagnosisRunner):
         state["terminal_status"] = HarnessStatus.COMPLETED
         state["step_count"] = 3
         state["final_answer"] = "已根据补充信息完成诊断。"
+        return state
+
+
+class ApprovalDiagnosisRunner(RecordingDiagnosisRunner):
+    """记录审批决议与获批续跑，验证两步调用边界。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.approval_calls: list[tuple[UUID, ApprovalCommand]] = []
+        self.approved_resume_calls: list[UUID] = []
+
+    def resolve_approval(self, *, run_id: UUID, command: ApprovalCommand) -> DiagnosisState:
+        """模拟仅保存审批决议，不执行工具。"""
+        self.approval_calls.append((run_id, command))
+        state = create_initial_state(
+            session_id="session-approval",
+            thread_id="thread-approval",
+            user_query="审批诊断",
+            budget=BudgetState(
+                max_steps=4,
+                max_tool_calls=2,
+                max_model_calls=2,
+                max_tokens=1_000,
+                max_runtime_seconds=60,
+                max_estimated_cost_usd=0.1,
+            ),
+        )
+        state["run_id"] = str(run_id)
+        return state
+
+    async def resume_approved(self, run_id: UUID) -> DiagnosisState:
+        """模拟在独立调用中执行已批准动作后的结果。"""
+        self.approved_resume_calls.append(run_id)
+        state = await self.run(
+            session_id="session-approval",
+            thread_id="thread-approval",
+            user_query="审批诊断",
+        )
+        state["run_id"] = str(run_id)
+        state["step_count"] = 4
+        state["final_answer"] = "获批动作已执行并完成诊断。"
         return state
 
 
@@ -224,3 +267,39 @@ def test_run_input_endpoint_returns_service_unavailable_without_resumer() -> Non
 
     assert response.status_code == 503
     assert response.json() == {"detail": "diagnosis run resumer is not configured"}
+
+
+def test_approval_endpoint_records_decision_without_resuming() -> None:
+    """记录批准决议时，不得在同一请求执行获批动作。"""
+    runner = ApprovalDiagnosisRunner()
+    run_id = uuid4()
+
+    with TestClient(create_app(diagnosis_runner=runner)) as client:
+        response = client.post(
+            f"/api/v1/runs/{run_id}/approval",
+            json={"decision": "approve", "reason": "维护窗口已确认。"},
+        )
+
+    assert response.status_code == 200
+    assert runner.approval_calls == [
+        (
+            run_id,
+            ApprovalCommand(decision=ApprovalDecision.APPROVE, reason="维护窗口已确认。"),
+        )
+    ]
+    assert runner.approved_resume_calls == []
+
+
+def test_approval_resume_endpoint_runs_only_after_explicit_request() -> None:
+    """获批动作必须由单独的续跑请求触发。"""
+    runner = ApprovalDiagnosisRunner()
+    run_id = uuid4()
+
+    with TestClient(create_app(diagnosis_runner=runner)) as client:
+        response = client.post(f"/api/v1/runs/{run_id}/approval/resume")
+
+    assert response.status_code == 200
+    assert response.json()["run_id"] == str(run_id)
+    assert response.json()["final_answer"] == "获批动作已执行并完成诊断。"
+    assert runner.approval_calls == []
+    assert runner.approved_resume_calls == [run_id]

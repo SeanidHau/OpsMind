@@ -7,6 +7,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.dependencies import (
+    get_approved_diagnosis_run_resumer,
+    get_diagnosis_approval_resolver,
     get_diagnosis_run_reader,
     get_diagnosis_run_resumer,
     get_diagnosis_runner,
@@ -16,7 +18,14 @@ from app.api.schemas.runs import (
     DiagnosisRunResponse,
     ResumeDiagnosisRunRequest,
 )
-from app.diagnosis.runner import DiagnosisRunner, DiagnosisRunReader, DiagnosisRunResumer
+from app.diagnosis.runner import (
+    ApprovedDiagnosisRunResumer,
+    DiagnosisApprovalResolver,
+    DiagnosisRunner,
+    DiagnosisRunReader,
+    DiagnosisRunResumer,
+)
+from app.models.contracts import ApprovalCommand
 
 router = APIRouter(prefix="/api/v1", tags=["runs"])
 
@@ -75,6 +84,67 @@ async def resume_diagnosis_run_with_user_input(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="run cannot accept user input",
+        ) from error
+
+    return response_from_state(result)
+
+
+@router.post(
+    "/runs/{run_id}/approval",
+    response_model=DiagnosisRunResponse,
+    status_code=status.HTTP_200_OK,
+    summary="记录高风险动作的审批决议",
+)
+async def resolve_diagnosis_approval(
+    run_id: UUID,
+    command: ApprovalCommand,
+    approval_resolver: Annotated[
+        DiagnosisApprovalResolver,
+        Depends(get_diagnosis_approval_resolver),
+    ],
+) -> DiagnosisRunResponse:
+    """保存批准、编辑或拒绝决议，但不在当前请求执行工具。"""
+    try:
+        result = approval_resolver.resolve_approval(run_id=run_id, command=command)
+    except KeyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="run not found",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="run cannot accept approval",
+        ) from error
+
+    return response_from_state(result)
+
+
+@router.post(
+    "/runs/{run_id}/approval/resume",
+    response_model=DiagnosisRunResponse,
+    status_code=status.HTTP_200_OK,
+    summary="续跑已批准的高风险动作",
+)
+async def resume_approved_diagnosis_run(
+    run_id: UUID,
+    approved_run_resumer: Annotated[
+        ApprovedDiagnosisRunResumer,
+        Depends(get_approved_diagnosis_run_resumer),
+    ],
+) -> DiagnosisRunResponse:
+    """从审批决议 checkpoint 恢复，不重新提交审批。"""
+    try:
+        result = await approved_run_resumer.resume_approved(run_id)
+    except KeyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="run not found",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="run cannot resume approved action",
         ) from error
 
     return response_from_state(result)
