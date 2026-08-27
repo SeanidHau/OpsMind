@@ -4,7 +4,7 @@ from typing import cast
 
 from fastapi import HTTPException, Request, status
 
-from app.diagnosis.runner import DiagnosisRunner
+from app.diagnosis.runner import DiagnosisRunner, DiagnosisRunReader
 from app.tools.registry import ToolRegistry
 from app.tools.scenarios import ScenarioStore
 
@@ -30,3 +30,14 @@ def get_diagnosis_runner(request: Request) -> DiagnosisRunner:
             detail="diagnosis runtime is not configured",
         )
     return cast(DiagnosisRunner, runner)
+
+
+def get_diagnosis_run_reader(request: Request) -> DiagnosisRunReader:
+    """返回运行查询接口；未配置快照读取能力时拒绝查询。"""
+    runner = getattr(request.app.state, "diagnosis_runner", None)
+    if runner is None or not callable(getattr(runner, "get_run", None)):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="diagnosis run reader is not configured",
+        )
+    return cast(DiagnosisRunReader, runner)

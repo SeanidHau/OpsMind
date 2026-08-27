@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from typing import Protocol
+from uuid import UUID
 
 from app.harness.loop import HarnessLoop, create_initial_state
-from app.models.contracts import BudgetState, DiagnosisState
+from app.models.contracts import BudgetState, DiagnosisState, ReplayResult
 
 
 class DiagnosisRunner(Protocol):
@@ -19,6 +20,13 @@ class DiagnosisRunner(Protocol):
         user_query: str,
     ) -> DiagnosisState:
         """运行单次诊断并返回最终或暂停状态。"""
+
+
+class DiagnosisRunReader(Protocol):
+    """读取已归档诊断运行的最小接口。"""
+
+    def get_run(self, run_id: UUID) -> ReplayResult:
+        """返回缓存快照，不重新执行模型、工具或图节点。"""
 
 
 class HarnessDiagnosisRunner:
@@ -57,3 +65,7 @@ class HarnessDiagnosisRunner:
             budget=self._budget_template.model_copy(deep=True),
         )
         return await self._harness_loop.run(initial_state)
+
+    def get_run(self, run_id: UUID) -> ReplayResult:
+        """读取 Harness 缓存的运行快照，不触发新的诊断执行。"""
+        return self._harness_loop.replay_cached(run_id)
