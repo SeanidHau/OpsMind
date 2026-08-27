@@ -27,6 +27,16 @@ class ScenarioStore:
             raise ToolExecutionError(f"scenario not found: {service}")
         return scenario
 
+    def list_scenarios(self) -> tuple[IncidentScenario, ...]:
+        """按稳定场景 ID 返回深拷贝，避免调用方修改内部场景数据。"""
+        return tuple(
+            scenario.model_copy(deep=True)
+            for scenario in sorted(
+                self._scenarios.values(),
+                key=lambda scenario: scenario.scenario_id,
+            )
+        )
+
 
 def register_scenario_tools(registry: ToolRegistry, store: ScenarioStore) -> None:
     """向注册表添加日志、指标和拓扑三个低风险只读工具。"""
