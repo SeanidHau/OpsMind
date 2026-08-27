@@ -10,6 +10,8 @@ from app.api.routers.tools import router as tools_router
 from app.api.version import API_VERSION
 from app.config import AppEnvironment, Settings, get_settings
 from app.diagnosis.runner import DiagnosisRunner
+from app.diagnosis.runtime import create_harness_diagnosis_runner
+from app.harness.loop import ActionProvider
 from app.observability.logging import configure_logging
 from app.scenarios.defaults import create_default_scenario_store
 from app.tools.registry import ToolRegistry
@@ -21,8 +23,12 @@ def create_app(
     settings: Settings | None = None,
     scenario_store: ScenarioStore | None = None,
     diagnosis_runner: DiagnosisRunner | None = None,
+    action_provider: ActionProvider | None = None,
 ) -> FastAPI:
     """创建应用实例，并注入可替换的配置供后续依赖使用。"""
+    if diagnosis_runner is not None and action_provider is not None:
+        raise ValueError("diagnosis_runner and action_provider cannot be provided together")
+
     resolved_settings = settings or get_settings()
     configure_logging(log_level=resolved_settings.log_level)
 
@@ -40,12 +46,19 @@ def create_app(
     app.state.settings = resolved_settings
 
     app.state.scenario_store = scenario_store or create_default_scenario_store()
-    app.state.diagnosis_runner = diagnosis_runner
 
     # 每个应用实例使用独立注册表；工具与场景存储保持同一注入来源。
     tool_registry = ToolRegistry()
     register_scenario_tools(tool_registry, app.state.scenario_store)
     app.state.tool_registry = tool_registry
+    app.state.diagnosis_runner = diagnosis_runner or (
+        create_harness_diagnosis_runner(
+            action_provider=action_provider,
+            tool_registry=tool_registry,
+        )
+        if action_provider is not None
+        else None
+    )
 
     app.add_middleware(RequestContextMiddleware)
 
