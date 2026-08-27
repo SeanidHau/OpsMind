@@ -1,8 +1,12 @@
 //! OpsMind 的 GPUI 桌面控制台入口。
 
-/// 在下一阶段由 GPUI 网络适配器调用的安全 SSE 解析器。
+/// 在后续阶段由 GPUI 网络适配器调用的安全 SSE 解析器。
 #[allow(dead_code)]
 mod sse;
+
+/// 负责读取后端健康状态和场景摘要的只读客户端。
+#[allow(dead_code)]
+mod api_client;
 
 use gpui::{
     App, Application, Bounds, Context, IntoElement, Render, Window, WindowBounds, WindowOptions,
