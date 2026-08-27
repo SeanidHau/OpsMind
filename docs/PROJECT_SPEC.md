@@ -2,7 +2,7 @@
 
 > 面向秋招展示的 Agent 工程项目设计文档
 >
-> 技术栈：Python、LangChain、LangGraph、RAG、FastAPI、Streamlit、Qdrant、PostgreSQL、Docker Compose、LangSmith
+> 技术栈：Python、LangChain、LangGraph、RAG、FastAPI、GPUI、Qdrant、PostgreSQL、Docker Compose、LangSmith
 
 ## 1. 项目定位
 
@@ -92,7 +92,7 @@ OpsMind 是一个面向长流程任务的 Agent Harness，使用运维故障诊�
 - 模拟工单创建；
 - 至少 50 条离线评测样本；
 - Docker Compose 启动方式；
-- Streamlit 运维诊断工作台；
+- GPUI 运维诊断桌面工作台；
 - README、架构图、评测报告和演示材料。
 
 ### 明确不做
@@ -113,7 +113,7 @@ OpsMind 是一个面向长流程任务的 Agent Harness，使用运维故障诊�
 
 架构数据流：
 
-Streamlit 工作台 → FastAPI 服务层 → LangGraph Diagnosis Graph → RAG 检索层和模拟工具层 → Qdrant、PostgreSQL。
+GPUI 桌面工作台 → FastAPI 服务层 → LangGraph Diagnosis Graph → RAG 检索层和模拟工具层 → Qdrant、PostgreSQL。
 
 ### 组件职责
 
@@ -126,7 +126,7 @@ Streamlit 工作台 → FastAPI 服务层 → LangGraph Diagnosis Graph → RAG 
 | Qdrant | 文档切片向量和元数据过滤 |
 | PostgreSQL | 会话、运行记录、审批、工单、评测和 checkpoint |
 | FastAPI | 后端 API 与 SSE 流式事件 |
-| Streamlit | 对话、执行时间线、证据和审批交互 |
+| GPUI | 对话、执行时间线、证据和审批交互 |
 | LangSmith | Trace、Prompt 调试、数据集和评测实验 |
 | Docker Compose | 本地一键启动 |
 
@@ -513,7 +513,7 @@ classify → retrieve → collect_evidence → analyze → check_completeness �
 
 run_started、node_started、tool_called、tool_finished、evidence_found、approval_required、run_finished、run_failed。
 
-Streamlit 依据事件更新 Agent 执行时间线、工具结果、证据和审批卡片。
+GPUI 桌面工作台依据事件更新 Agent 执行时间线、工具结果、证据和审批卡片。
 
 ## 15. 前端工作台
 
@@ -524,7 +524,7 @@ Streamlit 依据事件更新 Agent 执行时间线、工具结果、证据和审
 - 右侧：Agent 执行时间线、证据、工具结果和系统状态；
 - 审批卡片：展示操作内容、风险等级和批准/拒绝按钮。
 
-MVP 使用 Streamlit；如果时间充足，再替换为 React + TypeScript。
+MVP 使用 GPUI 桌面工作台。
 
 ## 16. 模型与配置
 
@@ -652,7 +652,7 @@ Docker Compose 服务：
 
     docker compose up -d
     python scripts/ingest.py
-    streamlit run frontend/app.py
+    cargo run --manifest-path frontend/Cargo.toml
 
 ## 20. 4～6 周开发计划
 
@@ -672,7 +672,7 @@ Harness 版本建议按 4～6 周安排。如果必须在 2～4 周内完成，�
 
 ### 第 4 周：展示与评测
 
-实现 Streamlit 工作台；准备 50 条评测样本；接入 LangSmith Trace 和评测；完善失败案例；编写 Docker Compose、README 和架构图；录制 3～5 分钟演示视频；整理简历项目描述和面试问答。
+实现 GPUI 工作台；准备 50 条评测样本；接入 LangSmith Trace 和评测；完善失败案例；编写 Docker Compose、README 和架构图；录制 3～5 分钟演示视频；整理简历项目描述和面试问答。
 
 ## 21. 秋招简历描述
 
@@ -710,7 +710,7 @@ Harness 版本建议按 4～6 周安排。如果必须在 2～4 周内完成，�
 
 当以下条件全部满足时，OpsMind 的 MVP 才算完成：
 
-- 用户可以从 Streamlit 发起一轮故障诊断；
+- 用户可以从 GPUI 工作台发起一轮故障诊断；
 - Agent 能走通分类、检索、工具查询、分析和报告生成；
 - Harness 能完成计划、上下文组装、动作校验、工具执行、观察、进度验证和终止；
 - 至少一个案例能触发人工审批并恢复执行；

@@ -8,6 +8,9 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Rust/GPUI 桌面端构建产物
+frontend/target/
+
 # 本地配置与密钥
 .env
 .env.*

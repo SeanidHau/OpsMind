@@ -1,0 +1,8 @@
+[package]
+name = "opsmind-desktop"
+version = "0.1.0"
+edition = "2024"
+description = "GPUI desktop console for the OpsMind agent harness."
+
+[dependencies]
+gpui = "=0.2.2"
