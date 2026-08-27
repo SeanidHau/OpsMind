@@ -9,6 +9,7 @@ from app.api.routers.system import router as system_router
 from app.api.routers.tools import router as tools_router
 from app.api.version import API_VERSION
 from app.config import AppEnvironment, Settings, get_settings
+from app.diagnosis.providers import create_action_provider
 from app.diagnosis.runner import DiagnosisRunner
 from app.diagnosis.runtime import create_harness_diagnosis_runner
 from app.harness.loop import ActionProvider
@@ -32,6 +33,8 @@ def create_app(
     resolved_settings = settings or get_settings()
     configure_logging(log_level=resolved_settings.log_level)
 
+    resolved_action_provider = action_provider or create_action_provider(resolved_settings)
+
     app = FastAPI(
         title="OpsMind API",
         version=API_VERSION,
@@ -53,10 +56,10 @@ def create_app(
     app.state.tool_registry = tool_registry
     app.state.diagnosis_runner = diagnosis_runner or (
         create_harness_diagnosis_runner(
-            action_provider=action_provider,
+            action_provider=resolved_action_provider,
             tool_registry=tool_registry,
         )
-        if action_provider is not None
+        if resolved_action_provider is not None
         else None
     )
 
