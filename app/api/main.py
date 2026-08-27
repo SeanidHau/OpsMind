@@ -2,14 +2,17 @@
 
 from fastapi import FastAPI
 
+from app.api.middleware import RequestContextMiddleware
 from app.api.routers.system import router as system_router
 from app.api.version import API_VERSION
 from app.config import AppEnvironment, Settings, get_settings
+from app.observability.logging import configure_logging
 
 
 def create_app(*, settings: Settings | None = None) -> FastAPI:
     """创建应用实例，并注入可替换的配置供后续依赖使用。"""
     resolved_settings = settings or get_settings()
+    configure_logging(log_level=resolved_settings.log_level)
 
     app = FastAPI(
         title="OpsMind API",
@@ -23,6 +26,8 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
 
     # 保存解析后的配置；路由层不应自行读取环境变量。
     app.state.settings = resolved_settings
+
+    app.add_middleware(RequestContextMiddleware)
 
     # 所有公开 API 使用 /api/v1 前缀，便于后续版本演进。
     app.include_router(system_router)
