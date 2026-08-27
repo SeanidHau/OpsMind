@@ -6,3 +6,4 @@ description = "GPUI desktop console for the OpsMind agent harness."
 
 [dependencies]
 gpui = "=0.2.2"
+serde_json = "1.0"
