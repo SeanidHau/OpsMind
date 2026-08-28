@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.harness.evaluation import TrajectoryEvaluator
 from app.harness.snapshot import RunSnapshotFactory
@@ -287,3 +288,55 @@ class OfflineBenchmarkRunner:
             if passed
             else f"缺少必需工具证据：{', '.join(missing_tools)}。",
         )
+
+
+COMPARABLE_METRIC_FIELDS = (
+    "run_count",
+    "completed_run_count",
+    "completion_rate",
+    "trajectory_pass_rate",
+    "average_tool_calls",
+    "duplicate_tool_call_rate",
+    "average_model_calls",
+    "average_used_tokens",
+    "average_context_chars",
+)
+
+
+def compare_benchmark_results(results: Mapping[str, BenchmarkResult]) -> dict[str, Any]:
+    """以 full 配置为基准，汇总同一批样本的实验差异。"""
+    baseline = results.get("full")
+    if baseline is None:
+        raise ValueError("benchmark comparison requires a full profile result")
+
+    case_ids = [case_result.case_id for case_result in baseline.case_results]
+    for profile, result in results.items():
+        if [case_result.case_id for case_result in result.case_results] != case_ids:
+            raise ValueError(f"benchmark case IDs for profile {profile} do not match full")
+
+    baseline_metrics = baseline.metrics.model_dump()
+    profiles = []
+    for profile in ["full", *sorted(name for name in results if name != "full")]:
+        result = results[profile]
+        metrics = result.metrics.model_dump()
+        profiles.append(
+            {
+                "profile": profile,
+                "passed": result.passed,
+                "score": result.score,
+                "metrics": metrics,
+                "deltas_from_full": {
+                    "score": result.score - baseline.score,
+                    **{
+                        field: metrics[field] - baseline_metrics[field]
+                        for field in COMPARABLE_METRIC_FIELDS
+                    },
+                },
+            }
+        )
+
+    return {
+        "baseline_profile": "full",
+        "case_ids": case_ids,
+        "profiles": profiles,
+    }

@@ -178,6 +178,24 @@ uv run python -m scripts.run_benchmark --profile without_progress_verifier
 
 JSON 输出顶层的 `profile` 标识本次配置。这些是受控组件消融，不等同于移除预算和安全策略后的普通 Agent 基线。
 
+将每次输出保存到不同文件后，可生成以 `full` 为基准的汇总报告。比较命令不会调用模型：
+
+```bash
+mkdir -p data/runtime/benchmarks
+uv run python -m scripts.run_benchmark --profile full \
+  > data/runtime/benchmarks/full.json
+uv run python -m scripts.run_benchmark --profile without_context_manager \
+  > data/runtime/benchmarks/without_context_manager.json
+uv run python -m scripts.run_benchmark --profile without_progress_verifier \
+  > data/runtime/benchmarks/without_progress_verifier.json
+uv run python -m scripts.compare_benchmark_results \
+  data/runtime/benchmarks/full.json \
+  data/runtime/benchmarks/without_context_manager.json \
+  data/runtime/benchmarks/without_progress_verifier.json
+```
+
+三次运行必须使用相同模型、样本文件和环境配置。比较脚本会拒绝样本 ID 不一致的结果文件。
+
 ### 启动 GPUI 桌面工作台
 
 先启动 FastAPI 服务。配置模型供应商后，工作台才能创建真实诊断运行。
