@@ -1,10 +1,10 @@
 """HybridRetriever 的验收测试。"""
 
 import pytest
-from app.rag.hybrid import HybridRetriever
 
 from app.models.contracts import KnowledgeChunk, VectorizedChunk
 from app.rag.bm25 import BM25Retriever
+from app.rag.hybrid import HybridRetriever
 from app.rag.vector import InMemoryVectorRetriever
 
 

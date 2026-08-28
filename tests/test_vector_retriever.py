@@ -1,9 +1,9 @@
 """InMemoryVectorRetriever 的验收测试。"""
 
 import pytest
-from app.rag.vector import InMemoryVectorRetriever
 
 from app.models.contracts import KnowledgeChunk, VectorizedChunk
+from app.rag.vector import InMemoryVectorRetriever
 
 
 def make_records() -> list[VectorizedChunk]:

@@ -1,9 +1,9 @@
 """ReciprocalRankFusion 的验收测试。"""
 
 import pytest
-from app.rag.fusion import ReciprocalRankFusion, RetrieverResult
 
 from app.models.contracts import KnowledgeChunk, RetrievalHit
+from app.rag.fusion import ReciprocalRankFusion, RetrieverResult
 
 
 def make_hit(chunk_id: str, rank: int) -> RetrievalHit:

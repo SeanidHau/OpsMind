@@ -226,7 +226,7 @@ cargo test --manifest-path frontend/Cargo.toml
 cargo check --manifest-path frontend/Cargo.toml
 uv lock --check
 uv run pytest
-uv run ruff check .
+uv run ruff check --no-cache .
 uv run ruff format --check .
 uv run mypy app
 ```

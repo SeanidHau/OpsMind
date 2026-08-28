@@ -8,7 +8,7 @@ Python 任务使用 `uv` 安装项目锁定依赖，并按以下顺序检查：
 
 1. `uv lock --check`
 2. `uv run pytest`
-3. `uv run ruff check .`
+3. `uv run ruff check --no-cache .`
 4. `uv run ruff format --check .`
 5. `uv run mypy app`
 6. `docker compose config --quiet`

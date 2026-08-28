@@ -25,7 +25,7 @@ jobs:
       - run: uv sync --locked --all-groups
       - run: uv lock --check
       - run: uv run pytest
-      - run: uv run ruff check .
+      - run: uv run ruff check --no-cache .
       - run: uv run ruff format --check .
       - run: uv run mypy app
       - run: docker compose config --quiet
