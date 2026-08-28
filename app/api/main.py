@@ -20,6 +20,8 @@ from app.diagnosis.runtime import create_harness_diagnosis_runner
 from app.harness.loop import ActionProvider
 from app.harness.snapshot import InMemoryRunArchive, PostgresRunArchive, RunArchive
 from app.observability.logging import configure_logging
+from app.rag.bm25 import BM25Retriever
+from app.rag.documents import load_markdown_chunks
 from app.rag.embeddings import create_embedding_client
 from app.rag.milvus_store import MilvusVectorStore
 from app.rag.search import KnowledgeSearcher
@@ -48,6 +50,7 @@ def create_knowledge_searcher(settings: Settings) -> KnowledgeSearcher | None:
             collection_name=settings.knowledge_collection_name,
             vector_size=settings.embedding_vector_size,
         ),
+        keyword_retriever=BM25Retriever(load_markdown_chunks(settings.knowledge_source_directory)),
     )
 
 

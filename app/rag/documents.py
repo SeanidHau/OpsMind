@@ -72,6 +72,17 @@ class MarkdownKnowledgeLoader:
         return None
 
 
+def markdown_paths(directory: Path) -> list[Path]:
+    """按文件名稳定返回目录中的 Markdown 文档路径。"""
+    if not directory.is_dir():
+        raise ValueError(f"knowledge directory does not exist: {directory}")
+
+    paths = sorted(directory.glob("*.md"))
+    if not paths:
+        raise ValueError(f"knowledge directory contains no Markdown files: {directory}")
+    return paths
+
+
 class MarkdownChunker:
     """按固定字符窗口切分文档，并生成稳定分块ID。"""
 
@@ -140,3 +151,16 @@ class MarkdownChunker:
         """使用来源、索引和内容生成可复现的 SHA-256 分块标识。"""
         payload = f"{source_id}:{index}:{content}".encode()
         return sha256(payload).hexdigest()
+
+
+def load_markdown_chunks(
+    directory: Path, *, chunker: MarkdownChunker | None = None
+) -> list[KnowledgeChunk]:
+    """读取目录中的 Markdown，并按固定规则构建 BM25 分块。"""
+    loader = MarkdownKnowledgeLoader()
+    resolved_chunker = chunker or MarkdownChunker()
+    return [
+        chunk
+        for path in markdown_paths(directory)
+        for chunk in resolved_chunker.split(loader.load(path))
+    ]

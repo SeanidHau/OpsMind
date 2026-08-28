@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import AnyHttpUrl, Field, PostgresDsn, SecretStr, field_validator
@@ -16,6 +17,9 @@ class AppEnvironment(StrEnum):
     DEVELOPMENT = "development"
     TEST = "test"
     PRODUCTION = "production"
+
+
+DEFAULT_KNOWLEDGE_SOURCE_DIRECTORY = Path(__file__).resolve().parents[1] / "data" / "knowledge"
 
 
 class Settings(BaseSettings):
@@ -58,6 +62,7 @@ class Settings(BaseSettings):
     knowledge_collection_name: str = Field(
         default="opsmind_knowledge", min_length=1, max_length=255
     )
+    knowledge_source_directory: Path = DEFAULT_KNOWLEDGE_SOURCE_DIRECTORY
 
     # LangSmith 默认关闭；后续评测阶段再按配置启用。
     langsmith_tracing: bool = False

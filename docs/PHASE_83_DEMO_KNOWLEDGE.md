@@ -29,7 +29,7 @@
    uv run python -m scripts.ingest_knowledge
    ```
 
-脚本默认读取 `data/knowledge/`。使用 `--source-dir` 可以指定其他 Markdown 目录。目录必须存在且至少包含一个 `.md` 文件。
+脚本默认读取 `KNOWLEDGE_SOURCE_DIRECTORY`，其默认值为 `data/knowledge/`。使用 `--source-dir` 可以指定其他 Markdown 目录。应用查询时也必须使用相同目录。目录必须存在且至少包含一个 `.md` 文件。
 
 脚本按文件名顺序处理文档。稳定分块 ID 与 Milvus upsert 使重复运行保持幂等。
 

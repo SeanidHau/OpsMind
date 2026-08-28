@@ -2,10 +2,24 @@
 
 from __future__ import annotations
 
-from app.models.contracts import FusedRetrievalHit
+from typing import Protocol
+
+from app.models.contracts import FusedRetrievalHit, RetrievalHit
 from app.rag.bm25 import BM25Retriever
 from app.rag.fusion import ReciprocalRankFusion, RetrieverResult
-from app.rag.vector import InMemoryVectorRetriever
+
+
+class VectorRetriever(Protocol):
+    """混合检索所需的最小向量召回接口。"""
+
+    def search(
+        self,
+        query_vector: list[float],
+        *,
+        top_k: int = 3,
+        metadata_filter: dict[str, str] | None = None,
+    ) -> list[RetrievalHit]:
+        """返回已按向量相关性排序的知识分块。"""
 
 
 class HybridRetriever:
@@ -15,7 +29,7 @@ class HybridRetriever:
         self,
         *,
         keyword_retriever: BM25Retriever,
-        vector_retriever: InMemoryVectorRetriever,
+        vector_retriever: VectorRetriever,
         fusion: ReciprocalRankFusion | None = None,
     ) -> None:
         """注入两条检索路径，并允许替换 RRF 配置。"""

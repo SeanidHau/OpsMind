@@ -105,6 +105,7 @@ ANTHROPIC_BASE_URL=https://your-compatible-endpoint
 EMBEDDING_MODEL=your-embedding-model
 EMBEDDING_API_KEY=your-api-key
 EMBEDDING_VECTOR_SIZE=1536
+KNOWLEDGE_SOURCE_DIRECTORY=data/knowledge
 ```
 
 ```bash
@@ -112,7 +113,7 @@ docker compose up -d milvus
 uv run python -m scripts.ingest_knowledge
 ```
 
-`EMBEDDING_VECTOR_SIZE` 必须与 Embedding 模型输出维度一致。脚本按文件名顺序读取 Markdown，并使用 Milvus upsert，因此可以重复运行。
+`EMBEDDING_VECTOR_SIZE` 必须与 Embedding 模型输出维度一致。应用和脚本必须使用同一个 `KNOWLEDGE_SOURCE_DIRECTORY`。脚本按文件名顺序读取 Markdown，并使用 Milvus upsert，因此可以重复运行。
 
 ### 启动 GPUI 桌面工作台
 

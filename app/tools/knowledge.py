@@ -32,6 +32,7 @@ def register_knowledge_tools(registry: ToolRegistry, searcher: KnowledgeSearcher
                     "content": hit.chunk.content,
                     "metadata": hit.chunk.metadata,
                     "score": hit.score,
+                    "retriever_names": hit.retriever_names,
                 }
                 for hit in hits
             ],

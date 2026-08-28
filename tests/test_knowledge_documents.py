@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from app.models.contracts import KnowledgeDocument
-from app.rag.documents import MarkdownChunker, MarkdownKnowledgeLoader
+from app.rag.documents import (
+    MarkdownChunker,
+    MarkdownKnowledgeLoader,
+    load_markdown_chunks,
+    markdown_paths,
+)
 
 
 def write_runbook(path: Path) -> None:
@@ -84,3 +89,17 @@ def test_chunker_rejects_invalid_window_configuration() -> None:
 
     with pytest.raises(ValueError, match="chunk_overlap"):
         MarkdownChunker(chunk_size=10, chunk_overlap=10)
+
+
+def test_directory_helpers_sort_markdown_and_reject_empty_directories(tmp_path: Path) -> None:
+    """关键词索引与入库脚本必须稳定读取同一组 Markdown 文档。"""
+    write_runbook(tmp_path / "z-runbook.md")
+    write_runbook(tmp_path / "a-runbook.md")
+
+    assert [path.name for path in markdown_paths(tmp_path)] == ["a-runbook.md", "z-runbook.md"]
+    assert len(load_markdown_chunks(tmp_path)) == 2
+
+    empty_directory = tmp_path / "empty"
+    empty_directory.mkdir()
+    with pytest.raises(ValueError, match="contains no Markdown"):
+        markdown_paths(empty_directory)

@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from app.models.contracts import ActionType, AgentAction, KnowledgeChunk, RetrievalHit
+from app.rag.bm25 import BM25Retriever
 from app.rag.search import KnowledgeSearcher
 from app.tools.knowledge import register_knowledge_tools
 from app.tools.registry import ToolRegistry
@@ -96,9 +97,34 @@ async def test_knowledge_tool_vectorizes_query_and_returns_traceable_hits() -> N
                 "content": "连接池耗尽会导致支付超时。",
                 "metadata": {"service": "payment-service"},
                 "score": 0.9,
+                "retriever_names": ["vector"],
             }
         ],
     }
+
+
+def test_knowledge_searcher_fuses_keyword_and_vector_hits() -> None:
+    """同一分块被两条召回路径命中时，结果必须保留两者来源。"""
+    store = RecordingVectorStore()
+    keyword_retriever = BM25Retriever(
+        [
+            KnowledgeChunk(
+                chunk_id="payment-db",
+                source_id="payment-runbook",
+                index=0,
+                content="连接池耗尽会导致支付超时。",
+                metadata={"service": "payment-service"},
+            )
+        ]
+    )
+
+    hits = KnowledgeSearcher(
+        embedder=RecordingEmbedder(),
+        vector_store=store,
+        keyword_retriever=keyword_retriever,
+    ).search("支付超时", metadata_filter={"service": "payment-service"})
+
+    assert hits[0].retriever_names == ["bm25", "vector"]
 
 
 def test_knowledge_searcher_rejects_blank_query_before_embedding() -> None:
