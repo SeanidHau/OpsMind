@@ -1,20 +1,28 @@
 """离线 benchmark 聚合与样本期望的验收测试。"""
 
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 
-from app.harness.benchmark import OfflineBenchmarkRunner
+from app.harness.benchmark import (
+    HarnessBenchmarkSubject,
+    OfflineBenchmarkRunner,
+    load_benchmark_cases,
+)
+from app.harness.loop import create_initial_state
 from app.models.contracts import (
     AgentEvent,
     BudgetState,
     DiagnosisReport,
+    DiagnosisState,
     EvaluationCase,
     EventType,
     EvidenceItem,
     HarnessStatus,
     RunSnapshot,
 )
+from scripts.run_benchmark import benchmark_exit_code
 
 
 def event(run_id: UUID, event_type: EventType, step_id: int) -> AgentEvent:
@@ -137,3 +145,101 @@ async def test_benchmark_rejects_empty_case_list() -> None:
             cases=[],
             subject=FixedBenchmarkSubject(completed_snapshot()),
         )
+
+
+def test_loader_reads_committed_diagnosis_cases() -> None:
+    """提交的端到端样本必须可被统一评测契约读取。"""
+    cases = load_benchmark_cases(Path("data/evaluations/diagnosis_cases.json"))
+
+    assert [case.case_id for case in cases] == [
+        "order-http-5xx",
+        "payment-connection-pool",
+        "inventory-latency",
+        "recommendation-redis-cache",
+    ]
+
+
+def test_loader_rejects_duplicate_case_ids(tmp_path: Path) -> None:
+    """重复样本标识会使批量结果不可追溯，必须拒绝。"""
+    path = tmp_path / "cases.json"
+    path.write_text(
+        "["
+        '{"case_id":"duplicate","user_query":"first","expected_terminal_status":"completed"},'
+        '{"case_id":"duplicate","user_query":"second","expected_terminal_status":"completed"}'
+        "]",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="case_id values must be unique"):
+        load_benchmark_cases(path)
+
+
+@pytest.mark.asyncio
+async def test_harness_subject_converts_runner_state_to_snapshot() -> None:
+    """端到端适配器必须保留样本标识和运行快照中的查询。"""
+    state = create_initial_state(
+        session_id="source-session",
+        thread_id="source-thread",
+        user_query="source query",
+        budget=BudgetState(
+            max_steps=5,
+            max_tool_calls=3,
+            max_model_calls=3,
+            max_tokens=1_000,
+            max_runtime_seconds=60,
+            max_estimated_cost_usd=1.0,
+        ),
+    )
+
+    class RecordingRunner:
+        def __init__(self) -> None:
+            self.arguments: dict[str, str] | None = None
+
+        async def run(
+            self,
+            *,
+            session_id: str,
+            thread_id: str,
+            user_query: str,
+        ) -> DiagnosisState:
+            self.arguments = {
+                "session_id": session_id,
+                "thread_id": thread_id,
+                "user_query": user_query,
+            }
+            return state
+
+    runner = RecordingRunner()
+    snapshot = await HarnessBenchmarkSubject(runner=runner).run_case(case("payment-timeout"))
+
+    assert runner.arguments == {
+        "session_id": "benchmark-payment-timeout",
+        "thread_id": "benchmark-payment-timeout",
+        "user_query": "支付服务请求超时",
+    }
+    assert snapshot.run_id == UUID(state["run_id"])
+    assert snapshot.final_state["user_query"] == "source query"
+
+
+@pytest.mark.parametrize(
+    ("passed", "fail_on_failure", "expected_exit_code"),
+    [
+        (True, False, 0),
+        (True, True, 0),
+        (False, False, 0),
+        (False, True, 1),
+    ],
+)
+def test_benchmark_quality_gate_is_opt_in(
+    passed: bool,
+    fail_on_failure: bool,
+    expected_exit_code: int,
+) -> None:
+    """本地观察不阻断，CI 可显式将失败样本视为失败。"""
+    assert (
+        benchmark_exit_code(
+            passed=passed,
+            fail_on_failure=fail_on_failure,
+        )
+        == expected_exit_code
+    )

@@ -1,0 +1,30 @@
+[
+  {
+    "case_id": "order-http-5xx",
+    "user_query": "订单服务 HTTP 5xx 持续升高，日志提示 checkout-service 返回 502，请排查原因。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "checkout-service",
+    "expected_evidence_tools": ["query_logs", "query_metrics"]
+  },
+  {
+    "case_id": "payment-connection-pool",
+    "user_query": "支付服务请求超时，日志出现 database connection pool exhausted，请排查。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "connection pool",
+    "expected_evidence_tools": ["query_logs", "query_metrics"]
+  },
+  {
+    "case_id": "inventory-latency",
+    "user_query": "库存服务 P99 延迟升高，怀疑 catalog-service 依赖变慢，请给出诊断。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "catalog-service",
+    "expected_evidence_tools": ["query_logs", "query_metrics"]
+  },
+  {
+    "case_id": "recommendation-redis-cache",
+    "user_query": "推荐服务 Redis 缓存命中率下降且出现 command timeout，请排查原因。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "redis",
+    "expected_evidence_tools": ["query_logs", "query_metrics"]
+  }
+]

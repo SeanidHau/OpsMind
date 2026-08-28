@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Protocol
 
 from app.harness.evaluation import TrajectoryEvaluator
+from app.harness.snapshot import RunSnapshotFactory
 from app.models.contracts import (
     BenchmarkCaseResult,
     BenchmarkResult,
+    DiagnosisState,
     EvaluationCase,
     EvaluationCheck,
     RunSnapshot,
@@ -19,6 +23,49 @@ class BenchmarkSubject(Protocol):
 
     async def run_case(self, case: EvaluationCase) -> RunSnapshot:
         """执行样本并返回可供离线评测的快照。"""
+
+
+class DiagnosisSubject(Protocol):
+    """端到端基准运行所需的最小诊断执行接口。"""
+
+    async def run(
+        self,
+        *,
+        session_id: str,
+        thread_id: str,
+        user_query: str,
+    ) -> DiagnosisState:
+        """执行一轮诊断并返回已经归档的最终状态。"""
+
+
+def load_benchmark_cases(path: Path) -> list[EvaluationCase]:
+    """从 JSON 数组读取端到端基准样本，并拒绝重复标识。"""
+    raw_cases = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw_cases, list) or not raw_cases:
+        raise ValueError("benchmark cases must be a non-empty JSON array")
+
+    cases = [EvaluationCase.model_validate(case) for case in raw_cases]
+    if len({case.case_id for case in cases}) != len(cases):
+        raise ValueError("benchmark case_id values must be unique")
+    return cases
+
+
+class HarnessBenchmarkSubject:
+    """将应用诊断运行器适配为离线基准的快照来源。"""
+
+    def __init__(self, *, runner: DiagnosisSubject) -> None:
+        """注入应用已装配完成的诊断运行器。"""
+        self._runner = runner
+        self._snapshot_factory = RunSnapshotFactory()
+
+    async def run_case(self, case: EvaluationCase) -> RunSnapshot:
+        """使用稳定会话标识执行样本，并转换归档状态为快照。"""
+        state = await self._runner.run(
+            session_id=f"benchmark-{case.case_id}",
+            thread_id=f"benchmark-{case.case_id}",
+            user_query=case.user_query,
+        )
+        return self._snapshot_factory.build(state)
 
 
 class OfflineBenchmarkRunner:
