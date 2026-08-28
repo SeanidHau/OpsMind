@@ -125,6 +125,12 @@ uv run python -m scripts.evaluate_retrieval
 
 该命令只读取 Milvus，输出 JSON 格式的 `recall_at_k`、`mean_reciprocal_rank` 和每条样本的预期及实际来源。可通过 `--cases-file` 指定其他 JSON 样本文件，或通过 `--top-k` 调整返回数量。
 
+在 CI 中使用 `--fail-on-miss`。任一固定样本未在前 K 条结果中命中时，命令会先输出 JSON，再以状态码 `1` 退出：
+
+```bash
+uv run python -m scripts.evaluate_retrieval --fail-on-miss
+```
+
 ### 启动 GPUI 桌面工作台
 
 先启动 FastAPI 服务。配置模型供应商后，工作台才能创建真实诊断运行。

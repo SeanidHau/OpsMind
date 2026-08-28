@@ -26,10 +26,20 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="对已入库知识库执行只读检索评测")
     parser.add_argument("--cases-file", type=Path, default=DEFAULT_CASES_FILE)
     parser.add_argument("--top-k", type=int, default=3)
+    parser.add_argument(
+        "--fail-on-miss",
+        action="store_true",
+        help="任一固定样本未命中时，以状态码 1 退出",
+    )
     return parser.parse_args()
 
 
-def main() -> None:
+def quality_gate_exit_code(*, passed: bool, fail_on_miss: bool) -> int:
+    """仅在显式启用质量门禁且存在漏召回时返回失败状态码。"""
+    return int(fail_on_miss and not passed)
+
+
+def main() -> int:
     """输出带样本明细的检索指标 JSON，不修改 Milvus 数据。"""
     args = parse_args()
     settings = get_settings()
@@ -56,7 +66,11 @@ def main() -> None:
         searcher.close()
 
     print(json.dumps(evaluation.model_dump(mode="json"), ensure_ascii=False))
+    return quality_gate_exit_code(
+        passed=evaluation.passed,
+        fail_on_miss=args.fail_on_miss,
+    )
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

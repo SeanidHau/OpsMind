@@ -6,6 +6,7 @@ import pytest
 
 from app.models.contracts import FusedRetrievalHit, KnowledgeChunk, RetrievalEvaluationCase
 from app.rag.evaluation import RetrievalEvaluator, load_retrieval_cases
+from scripts.evaluate_retrieval import quality_gate_exit_code
 
 
 class FixedSearcher:
@@ -115,3 +116,21 @@ def test_evaluator_rejects_invalid_input() -> None:
             searcher=searcher,
             top_k=0,
         )
+
+
+@pytest.mark.parametrize(
+    ("passed", "fail_on_miss", "expected_exit_code"),
+    [
+        (True, False, 0),
+        (True, True, 0),
+        (False, False, 0),
+        (False, True, 1),
+    ],
+)
+def test_quality_gate_fails_only_for_requested_misses(
+    passed: bool,
+    fail_on_miss: bool,
+    expected_exit_code: int,
+) -> None:
+    """本地观察默认不阻断，CI 可显式将漏召回视为失败。"""
+    assert quality_gate_exit_code(passed=passed, fail_on_miss=fail_on_miss) == expected_exit_code
