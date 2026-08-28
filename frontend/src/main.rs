@@ -29,6 +29,7 @@ use crate::{
 
 const DEFAULT_API_BASE_URL: &str = "http://127.0.0.1:8000";
 const MAX_TRAJECTORY_ENTRIES: usize = 12;
+const MAX_FINAL_ANSWER_CHARS: usize = 12_000;
 
 struct OpsMindConsole {
     api_base_url: String,
@@ -91,6 +92,7 @@ enum RunState {
     Finished {
         status: String,
         step_count: usize,
+        final_answer: Option<String>,
     },
     Failed,
 }
@@ -598,7 +600,11 @@ impl OpsMindConsole {
             self.approval_submission = SubmissionState::Draft;
             return;
         }
-        self.run = RunState::Finished { status, step_count };
+        self.run = RunState::Finished {
+            final_answer: data["final_answer"].as_str().and_then(safe_final_answer),
+            status,
+            step_count,
+        };
     }
 
     fn apply_run_summary(&mut self, summary: DiagnosisRunSummary) {
@@ -650,9 +656,21 @@ impl OpsMindConsole {
             return;
         }
         self.run = RunState::Finished {
+            final_answer: summary.final_answer.as_deref().and_then(safe_final_answer),
             status,
             step_count: summary.step_count,
         };
+    }
+
+    fn final_answer(&self) -> Option<&str> {
+        match &self.run {
+            RunState::Finished {
+                status,
+                final_answer: Some(answer),
+                ..
+            } if status == "completed" => Some(answer),
+            _ => None,
+        }
     }
 
     fn run_detail(&self) -> String {
@@ -667,7 +685,9 @@ impl OpsMindConsole {
             RunState::RecordingApproval => String::from("正在记录审批决议。"),
             RunState::ApprovalRecorded { .. } => String::from("审批已记录，等待显式续跑。"),
             RunState::ResumingApproval => String::from("正在恢复已批准的动作。"),
-            RunState::Finished { status, step_count } => {
+            RunState::Finished {
+                status, step_count, ..
+            } => {
                 format!("运行结束 · {status} · {step_count} 个步骤")
             }
             RunState::Failed => String::from("运行未完成。请检查后端服务后重试。"),
@@ -730,6 +750,14 @@ fn safe_pending_approval(tool_name: &str, reason: &str) -> Option<(String, Strin
         return None;
     }
     Some((tool_name.to_owned(), reason.to_owned()))
+}
+
+fn safe_final_answer(value: &str) -> Option<String> {
+    let answer = value.trim();
+    if answer.is_empty() || answer.chars().count() > MAX_FINAL_ANSWER_CHARS {
+        return None;
+    }
+    Some(answer.to_owned())
 }
 
 fn is_safe_run_id(value: &str) -> bool {
@@ -1012,7 +1040,10 @@ impl Render for OpsMindConsole {
                                     ),
                             )
                         },
-                    ),
+                    )
+                    .when_some(self.final_answer().map(str::to_owned), |this, answer| {
+                        this.child(report_panel(&answer))
+                    }),
             )
     }
 }
@@ -1050,6 +1081,21 @@ fn trajectory_panel(detail: &str, entries: &[String]) -> impl IntoElement {
     panel
 }
 
+fn report_panel(answer: &str) -> impl IntoElement {
+    let mut panel = div()
+        .flex()
+        .flex_col()
+        .p(px(18.0))
+        .gap(px(8.0))
+        .bg(rgb(0x10261d))
+        .child(div().text_color(rgb(0x8ee6a8)).child("DIAGNOSIS REPORT"));
+
+    for line in answer.lines().filter(|line| !line.trim().is_empty()) {
+        panel = panel.child(div().text_size(px(13.0)).child(line.to_owned()));
+    }
+    panel
+}
+
 fn main() {
     Application::new().run(|cx: &mut App| {
         gpui_component::init(cx);
@@ -1070,7 +1116,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        is_safe_run_id, normalize_approval_reason, normalize_diagnosis_query,
+        is_safe_run_id, normalize_approval_reason, normalize_diagnosis_query, safe_final_answer,
         safe_pending_approval, safe_pending_question, trajectory_entry,
     };
 
@@ -1140,5 +1186,15 @@ mod tests {
         assert!(safe_pending_approval("restart_service", &"x".repeat(2_001)).is_none());
         assert!(normalize_approval_reason("  维护窗口已确认。 ").is_ok());
         assert!(normalize_approval_reason(" ").is_err());
+    }
+
+    #[test]
+    fn accepts_only_bounded_final_answers() {
+        assert_eq!(
+            safe_final_answer("  根因是连接池耗尽。  "),
+            Some(String::from("根因是连接池耗尽。"))
+        );
+        assert!(safe_final_answer(" ").is_none());
+        assert!(safe_final_answer(&"x".repeat(12_001)).is_none());
     }
 }
