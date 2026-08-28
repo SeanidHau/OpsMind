@@ -7,6 +7,7 @@ from app.harness.loop import ActionProvider, HarnessLoop
 from app.harness.policy import ActionPolicy
 from app.harness.snapshot import RunArchive
 from app.models.contracts import BudgetState
+from app.observability.langsmith import DiagnosisRunTracer
 from app.tools.registry import ToolRegistry
 
 
@@ -37,6 +38,7 @@ def create_harness_diagnosis_runner(
     budget_template: BudgetState | None = None,
     run_archive: RunArchive | None = None,
     profile: HarnessProfile = HarnessProfile.FULL,
+    tracer: DiagnosisRunTracer | None = None,
 ) -> HarnessDiagnosisRunner:
     """将动作提供器、受控工具和指定 Harness 组件组合装配为诊断服务。"""
     harness_loop = HarnessLoop(
@@ -50,4 +52,6 @@ def create_harness_diagnosis_runner(
     return HarnessDiagnosisRunner(
         harness_loop=harness_loop,
         budget_template=budget_template or default_budget_template(),
+        tracer=tracer,
+        trace_metadata={"harness_profile": profile.value},
     )

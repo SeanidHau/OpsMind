@@ -1,5 +1,6 @@
 """Harness 诊断运行服务的隔离与预算测试。"""
 
+from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 import pytest
@@ -38,6 +39,25 @@ class RecordingHarnessLoop:
         return self.states[0]
 
 
+class RecordingTracer:
+    """记录追踪边界，并在测试中直接执行实际操作。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict[str, str]]] = []
+
+    async def trace(
+        self,
+        *,
+        operation: str,
+        state: DiagnosisState,
+        metadata: dict[str, str],
+        execute: Callable[[], Awaitable[DiagnosisState]],
+    ) -> DiagnosisState:
+        """保存追踪元数据后执行被包装的 Harness 调用。"""
+        self.calls.append((operation, state["run_id"], metadata))
+        return await execute()
+
+
 def budget_template() -> BudgetState:
     """返回未消耗的可复用预算模板。"""
     return BudgetState(
@@ -66,6 +86,23 @@ async def test_harness_runner_creates_isolated_initial_state_and_budget() -> Non
     assert first["budget"] is not second["budget"]
     assert first["budget"] == budget_template()
     assert harness_loop.states == [first, second]
+
+
+@pytest.mark.asyncio
+async def test_harness_runner_traces_the_run_with_static_metadata() -> None:
+    """启用追踪时，运行 ID 和 Harness 配置必须进入同一追踪边界。"""
+    harness_loop = RecordingHarnessLoop()
+    tracer = RecordingTracer()
+    runner = HarnessDiagnosisRunner(
+        harness_loop=harness_loop,  # type: ignore[arg-type]
+        budget_template=budget_template(),
+        tracer=tracer,
+        trace_metadata={"harness_profile": "full"},
+    )
+
+    state = await runner.run(session_id="session-1", thread_id="thread-1", user_query="first")
+
+    assert tracer.calls == [("run", state["run_id"], {"harness_profile": "full"})]
 
 
 @pytest.mark.asyncio

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 from uuid import UUID
 
 from app.harness.events import HarnessEventObserver
 from app.harness.loop import HarnessLoop, create_initial_state
 from app.models.contracts import ApprovalCommand, BudgetState, DiagnosisState, ReplayResult
+from app.observability.langsmith import DiagnosisRunTracer
 
 
 class DiagnosisRunner(Protocol):
@@ -69,7 +71,14 @@ class ApprovedDiagnosisRunResumer(Protocol):
 class HarnessDiagnosisRunner:
     """使用固定预算模板创建新状态并委托给 Harness Loop。"""
 
-    def __init__(self, *, harness_loop: HarnessLoop, budget_template: BudgetState) -> None:
+    def __init__(
+        self,
+        *,
+        harness_loop: HarnessLoop,
+        budget_template: BudgetState,
+        tracer: DiagnosisRunTracer | None = None,
+        trace_metadata: dict[str, str] | None = None,
+    ) -> None:
         """绑定已经装配完成的 Harness 与未消耗的预算模板。"""
         if any(
             (
@@ -85,6 +94,8 @@ class HarnessDiagnosisRunner:
 
         self._harness_loop = harness_loop
         self._budget_template = budget_template
+        self._tracer = tracer
+        self._trace_metadata = trace_metadata or {}
 
     async def run(
         self,
@@ -101,7 +112,11 @@ class HarnessDiagnosisRunner:
             # 深拷贝避免一次运行累计的消耗影响下一次运行。
             budget=self._budget_template.model_copy(deep=True),
         )
-        return await self._harness_loop.run(initial_state)
+        return await self._trace(
+            operation="run",
+            state=initial_state,
+            execute=lambda: self._harness_loop.run(initial_state),
+        )
 
     async def run_with_event_observer(
         self,
@@ -121,7 +136,11 @@ class HarnessDiagnosisRunner:
             budget=self._budget_template.model_copy(deep=True),
             run_id=run_id,
         )
-        return await self._harness_loop.run(initial_state, event_observer=event_observer)
+        return await self._trace(
+            operation="run_with_event_observer",
+            state=initial_state,
+            execute=lambda: self._harness_loop.run(initial_state, event_observer=event_observer),
+        )
 
     async def get_run(self, run_id: UUID) -> ReplayResult:
         """读取 Harness 缓存的运行快照，不触发新的诊断执行。"""
@@ -129,12 +148,50 @@ class HarnessDiagnosisRunner:
 
     async def resume_with_user_input(self, run_id: UUID, answer: str) -> DiagnosisState:
         """将用户回答交给 Harness，从等待输入 checkpoint 续跑。"""
-        return await self._harness_loop.resume_with_user_input(run_id, answer)
+        if self._tracer is None:
+            return await self._harness_loop.resume_with_user_input(run_id, answer)
+        state = await self._harness_loop.restore_checkpoint(run_id)
+        return await self._trace(
+            operation="resume_with_user_input",
+            state=state,
+            execute=lambda: self._harness_loop.resume_with_user_input(run_id, answer),
+        )
 
     async def resolve_approval(self, *, run_id: UUID, command: ApprovalCommand) -> DiagnosisState:
         """记录审批决议，不在决议步骤执行工具。"""
-        return await self._harness_loop.resolve_approval(run_id=run_id, command=command)
+        if self._tracer is None:
+            return await self._harness_loop.resolve_approval(run_id=run_id, command=command)
+        state = await self._harness_loop.restore_checkpoint(run_id)
+        return await self._trace(
+            operation="resolve_approval",
+            state=state,
+            execute=lambda: self._harness_loop.resolve_approval(run_id=run_id, command=command),
+        )
 
     async def resume_approved(self, run_id: UUID) -> DiagnosisState:
         """从已批准 checkpoint 执行原始或编辑后的工具动作。"""
-        return await self._harness_loop.resume_approved(run_id)
+        if self._tracer is None:
+            return await self._harness_loop.resume_approved(run_id)
+        state = await self._harness_loop.restore_checkpoint(run_id)
+        return await self._trace(
+            operation="resume_approved",
+            state=state,
+            execute=lambda: self._harness_loop.resume_approved(run_id),
+        )
+
+    async def _trace(
+        self,
+        *,
+        operation: str,
+        state: DiagnosisState,
+        execute: Callable[[], Awaitable[DiagnosisState]],
+    ) -> DiagnosisState:
+        """无追踪器时直连 Harness，避免本地开发额外开销。"""
+        if self._tracer is None:
+            return await execute()
+        return await self._tracer.trace(
+            operation=operation,
+            state=state,
+            metadata=self._trace_metadata,
+            execute=execute,
+        )

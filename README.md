@@ -97,6 +97,20 @@ ANTHROPIC_BASE_URL=https://your-compatible-endpoint
 
 供应商专用密钥优先于 `LLM_API_KEY`。未配置模型供应商时，健康检查和场景目录仍可使用；创建诊断运行会返回 `503`。
 
+### 启用 LangSmith Trace
+
+配置有效的 LangSmith API Key 后，设置以下变量：
+
+```dotenv
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=your-langsmith-api-key
+LANGSMITH_PROJECT=opsmind-dev
+```
+
+启用后，应用运行和基准运行都会创建 `opsmind.harness_run` 根 Trace。每条 Trace 带有操作类型、运行 ID 和 `harness_profile`；LangGraph 与 LangChain 的内部调用将作为子 Trace 记录。未设置 `LANGSMITH_API_KEY` 时，`LANGSMITH_TRACING=true` 会使应用配置校验失败。
+
+根 Trace 的输入包含用户故障描述。模型提示词、工具参数和工具结果也可能被子 Trace 记录。将真实生产数据发送到 LangSmith 前，先完成组织的数据处理和访问控制评估。
+
 ### 导入演示知识库
 
 `data/knowledge/` 包含四份与预设故障场景对应的模拟 Runbook。启动 Milvus 并配置 OpenAI 兼容 Embedding 后，执行以下命令：

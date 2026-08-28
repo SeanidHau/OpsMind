@@ -18,6 +18,7 @@ from app.harness.benchmark import (
     load_benchmark_cases,
 )
 from app.harness.snapshot import InMemoryRunArchive, PostgresRunArchive, RunArchive
+from app.observability.langsmith import create_langsmith_tracer
 from app.rag.bm25 import BM25Retriever
 from app.rag.documents import load_markdown_chunks
 from app.rag.embeddings import create_embedding_client
@@ -112,6 +113,7 @@ async def main() -> int:
                     tool_registry=registry,
                     run_archive=run_archive,
                     profile=HarnessProfile(args.profile),
+                    tracer=create_langsmith_tracer(settings),
                 )
             ),
         )

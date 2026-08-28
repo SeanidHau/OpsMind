@@ -19,6 +19,7 @@ from app.diagnosis.runner import DiagnosisRunner
 from app.diagnosis.runtime import create_harness_diagnosis_runner
 from app.harness.loop import ActionProvider
 from app.harness.snapshot import InMemoryRunArchive, PostgresRunArchive, RunArchive
+from app.observability.langsmith import create_langsmith_tracer
 from app.observability.logging import configure_logging
 from app.rag.bm25 import BM25Retriever
 from app.rag.documents import load_markdown_chunks
@@ -120,6 +121,7 @@ def create_app(
             action_provider=resolved_action_provider,
             tool_registry=tool_registry,
             run_archive=resolved_run_archive,
+            tracer=create_langsmith_tracer(resolved_settings),
         )
         if resolved_action_provider is not None
         else None

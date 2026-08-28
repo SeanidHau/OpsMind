@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, Field, PostgresDsn, SecretStr, field_validator
+from pydantic import AnyHttpUrl, Field, PostgresDsn, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -90,6 +90,13 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @model_validator(mode="after")
+    def validate_langsmith_credentials(self) -> Settings:
+        """启用 LangSmith 时必须提供可用 API 密钥。"""
+        if self.langsmith_tracing and self.langsmith_api_key is None:
+            raise ValueError("langsmith_api_key is required when langsmith_tracing is enabled")
+        return self
 
 
 @lru_cache

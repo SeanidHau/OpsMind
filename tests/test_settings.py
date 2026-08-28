@@ -43,6 +43,12 @@ def test_settings_rejects_unknown_environment() -> None:
         make_settings(app_env="staging")
 
 
+def test_settings_require_langsmith_key_when_tracing_is_enabled() -> None:
+    """显式启用追踪时，不得静默使用空凭据。"""
+    with pytest.raises(ValidationError, match="langsmith_api_key"):
+        make_settings(langsmith_tracing=True)
+
+
 def test_get_settings_caches_a_single_process_instance(monkeypatch: pytest.MonkeyPatch) -> None:
     """重复读取配置时应复用实例，避免每个请求重新解析环境变量。"""
     monkeypatch.setenv("APP_ENV", "test")
