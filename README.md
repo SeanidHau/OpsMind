@@ -4,23 +4,25 @@ OpsMind 是一个面向长流程任务的 Agent Harness 项目，使用运维故
 
 ## 当前阶段
 
-已完成受控 Harness、RAG 与模拟工具、审批与续跑、运行回放、实时 SSE 和 GPUI 桌面工作台。PostgreSQL 持久化将在异步归档链路完成后接入。
+已完成受控 Harness、RAG 与模拟工具、用户输入续跑、高风险动作审批、运行回放、实时 SSE 和 GPUI 桌面工作台。
+
+当前运行归档使用进程内存。服务重启后，已归档运行不可读取或回放。PostgreSQL 持久化尚未接入运行归档链路。
 
 ## 技术栈
 
 - Python 3.12
 - LangChain、LangGraph、LangSmith
-- FastAPI、PostgreSQL、Qdrant
+- FastAPI、Qdrant、PostgreSQL（本地开发依赖）
 - pytest、Ruff、mypy、Docker Compose
 
 ## 本地开发
 
 ### 前置条件
 
-- 安装 Docker Desktop，并确保 Docker 服务正在运行。
 - 安装 `uv`。项目使用 `uv` 管理 Python 版本、虚拟环境和依赖锁定文件。
+- 如需启动 PostgreSQL 和 Qdrant，安装 Docker Desktop 并确保 Docker 服务正在运行。
 
-### 初始化步骤
+### 初始化
 
 1. 复制环境变量示例文件。
 
@@ -34,13 +36,15 @@ OpsMind 是一个面向长流程任务的 Agent Harness 项目，使用运维故
    uv sync --all-groups
    ```
 
-3. 启动 PostgreSQL 和 Qdrant。
+3. 可选：启动 PostgreSQL 和 Qdrant。
+
+   默认的模拟场景诊断不依赖这两个服务。需要验证本地基础设施配置时，运行：
 
    ```bash
    docker compose up -d
    ```
 
-4. 运行项目初始化验收。
+4. 运行项目验收。
 
    ```bash
    uv run pytest
@@ -48,6 +52,30 @@ OpsMind 是一个面向长流程任务的 Agent Harness 项目，使用运维故
    uv run mypy app
    docker compose config
    ```
+
+### 配置模型供应商
+
+在 `.env` 中至少配置一个支持的模型供应商。`LLM_PROVIDER` 仅支持 `openai` 或 `anthropic`。
+
+OpenAI 兼容接口示例：
+
+```dotenv
+LLM_PROVIDER=openai
+LLM_MODEL=your-model-name
+LLM_API_KEY=your-api-key
+LLM_BASE_URL=https://your-compatible-endpoint/v1
+```
+
+Anthropic 接口示例：
+
+```dotenv
+LLM_PROVIDER=anthropic
+LLM_MODEL=your-model-name
+ANTHROPIC_API_KEY=your-api-key
+ANTHROPIC_BASE_URL=https://your-compatible-endpoint
+```
+
+供应商专用密钥优先于 `LLM_API_KEY`。未配置模型供应商时，健康检查和场景目录仍可使用；创建诊断运行会返回 `503`。
 
 ### 启动 GPUI 桌面工作台
 
@@ -63,7 +91,26 @@ uv run uvicorn app.api.main:app --reload
 cargo run --manifest-path frontend/Cargo.toml
 ```
 
-桌面应用当前提供控制台壳和 API 连接信息。后续阶段将接入 `POST /api/v1/runs/stream` 的安全 SSE 事件、诊断输入和审批交互；不展示工具参数或原始工具观察结果。
+桌面应用通过 `POST /api/v1/runs/stream` 创建实时诊断运行，并提供：
+
+- 故障描述输入与实时安全轨迹；
+- 等待用户输入时的补充信息提交与续跑；
+- 高风险工具的两步审批：先记录决议，再显式确认续跑；
+- 完成态诊断报告的纯文本展示。
+
+桌面端不显示工具参数、原始工具观察结果、模型上下文或 Harness checkpoint 内容。
+
+### 完整验收
+
+```bash
+cargo test --manifest-path frontend/Cargo.toml
+cargo check --manifest-path frontend/Cargo.toml
+uv lock --check
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy app
+```
 
 ## 项目文档
 
