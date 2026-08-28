@@ -149,6 +149,21 @@ uv run python -m scripts.run_benchmark \
   --fail-on-failure
 ```
 
+### 比较 Harness 组件消融配置
+
+基准命令支持三种受控配置：`full`、`without_context_manager` 和
+`without_progress_verifier`。三种配置共用同一模型、样本、预算、策略、工具、证据门禁和运行归档；仅关闭指定的 Harness 组件。
+
+在相同环境中分别运行以下命令，再比较输出中的 `metrics`：
+
+```bash
+uv run python -m scripts.run_benchmark --profile full
+uv run python -m scripts.run_benchmark --profile without_context_manager
+uv run python -m scripts.run_benchmark --profile without_progress_verifier
+```
+
+JSON 输出顶层的 `profile` 标识本次配置。这些是受控组件消融，不等同于移除预算和安全策略后的普通 Agent 基线。
+
 ### 启动 GPUI 桌面工作台
 
 先启动 FastAPI 服务。配置模型供应商后，工作台才能创建真实诊断运行。

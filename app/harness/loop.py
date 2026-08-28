@@ -40,6 +40,9 @@ from app.models.contracts import (
     ApprovalDecision,
     BudgetConsumption,
     BudgetState,
+    ContextItem,
+    ContextSnapshot,
+    ContextSource,
     DiagnosisState,
     EventType,
     HarnessStatus,
@@ -150,6 +153,8 @@ class HarnessLoop:
         max_replans: int = 2,
         max_user_questions: int = 2,
         replan_on_tool_failure: bool = False,
+        use_context_manager: bool = True,
+        use_progress_verifier: bool = True,
     ) -> None:
         if max_tool_retries < 0:
             raise ValueError("max_tool_retries must not be negative")
@@ -178,6 +183,8 @@ class HarnessLoop:
         self._max_replans = max_replans
         self._max_user_questions = max_user_questions
         self._replan_on_tool_failure = replan_on_tool_failure
+        self._use_context_manager = use_context_manager
+        self._use_progress_verifier = use_progress_verifier
         self._model_retry_delay_seconds = model_retry_delay_seconds
         self._model_failure_classifier = model_failure_classifier or DefaultModelFailureClassifier()
         self._tool_failure_classifier = tool_failure_classifier or DefaultToolFailureClassifier()
@@ -1280,7 +1287,22 @@ class HarnessLoop:
 
     def _build_context(self, state: DiagnosisState) -> dict[str, Any]:
         """构建最小上下文，再允许动作提供器读取当前状态。"""
-        snapshot = self._context_manager.build(state)
+        snapshot = (
+            self._context_manager.build(state)
+            if self._use_context_manager
+            else ContextSnapshot(
+                items=[
+                    ContextItem(
+                        source=ContextSource.TASK,
+                        reference="user_query",
+                        content=state["user_query"],
+                        priority=100,
+                    )
+                ],
+                total_chars=len(state["user_query"]),
+                truncated=False,
+            )
+        )
         event = self._new_event(
             state,
             event_type=EventType.CONTEXT_BUILT,
@@ -1345,22 +1367,28 @@ class HarnessLoop:
                 action=action,
                 decision=action.reason,
             )
-            assessment = self._progress_verifier.assess(
-                action=action,
-                observation=None,
-                previous_fingerprints=state.get("progress_fingerprints", []),
-                consecutive_stalls=state.get("consecutive_stalls", 0),
-            )
-            return {
-                "progress_assessment": assessment,
-                "progress_status": assessment.status,
-                "consecutive_stalls": assessment.consecutive_stalls,
+            updates: dict[str, Any] = {
                 "terminal_status": HarnessStatus.COMPLETED,
                 "diagnosis_report": report,
                 "diagnosis": report.model_dump(mode="json"),
                 "final_answer": rendered_report,
                 "trajectory": [*state["trajectory"], event],
             }
+            if self._use_progress_verifier:
+                assessment = self._progress_verifier.assess(
+                    action=action,
+                    observation=None,
+                    previous_fingerprints=state.get("progress_fingerprints", []),
+                    consecutive_stalls=state.get("consecutive_stalls", 0),
+                )
+                updates.update(
+                    {
+                        "progress_assessment": assessment,
+                        "progress_status": assessment.status,
+                        "consecutive_stalls": assessment.consecutive_stalls,
+                    }
+                )
+            return updates
 
         error_text = f"unsupported terminal action: {action.action_type}"
         event = self._new_event(
@@ -1432,8 +1460,7 @@ class HarnessLoop:
             return "execute_tool"
         return "finish"
 
-    @staticmethod
-    def _route_after_tool(state: DiagnosisState) -> str:
+    def _route_after_tool(self, state: DiagnosisState) -> str:
         """按工具执行结果选择重试、验证进度或结束运行。"""
         if state.get("terminal_status") is not None:
             return "finish"
@@ -1441,7 +1468,7 @@ class HarnessLoop:
             return "build_context"
         if state["retry_count"] > 0:
             return "retry_tool"
-        return "verify_progress"
+        return "verify_progress" if self._use_progress_verifier else "build_context"
 
     @staticmethod
     def _route_after_verification(state: DiagnosisState) -> str:

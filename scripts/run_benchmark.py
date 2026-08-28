@@ -11,7 +11,7 @@ from pymilvus import MilvusClient  # type: ignore[import-untyped]
 
 from app.config import get_settings
 from app.diagnosis.providers import create_action_provider
-from app.diagnosis.runtime import create_harness_diagnosis_runner
+from app.diagnosis.runtime import HarnessProfile, create_harness_diagnosis_runner
 from app.harness.benchmark import (
     HarnessBenchmarkSubject,
     OfflineBenchmarkRunner,
@@ -34,9 +34,15 @@ DEFAULT_CASES_FILE = (
 
 
 def parse_args() -> argparse.Namespace:
-    """解析样本文件和可选的失败状态码开关。"""
+    """解析样本文件、Harness 组件配置和可选的失败状态码开关。"""
     parser = argparse.ArgumentParser(description="运行固定端到端诊断基准")
     parser.add_argument("--cases-file", type=Path, default=DEFAULT_CASES_FILE)
+    parser.add_argument(
+        "--profile",
+        choices=[profile.value for profile in HarnessProfile],
+        default=HarnessProfile.FULL.value,
+        help="选择 Context Manager 或 Progress Verifier 的消融配置",
+    )
     parser.add_argument(
         "--fail-on-failure",
         action="store_true",
@@ -105,6 +111,7 @@ async def main() -> int:
                     action_provider=action_provider,
                     tool_registry=registry,
                     run_archive=run_archive,
+                    profile=HarnessProfile(args.profile),
                 )
             ),
         )
@@ -114,7 +121,12 @@ async def main() -> int:
         if knowledge_searcher is not None:
             knowledge_searcher.close()
 
-    print(json.dumps(result.model_dump(mode="json"), ensure_ascii=False))
+    print(
+        json.dumps(
+            {"profile": args.profile, **result.model_dump(mode="json")},
+            ensure_ascii=False,
+        )
+    )
     return benchmark_exit_code(
         passed=result.passed,
         fail_on_failure=args.fail_on_failure,
