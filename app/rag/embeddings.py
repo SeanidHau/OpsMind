@@ -38,6 +38,8 @@ def create_embedding_client(settings: Settings) -> EmbeddingClient | None:
     kwargs: dict[str, object] = {
         "model": settings.embedding_model,
         "api_key": api_key,
+        # Ollama 的 OpenAI 兼容端点仅接受文本，不接受 LangChain 默认发送的 token 列表。
+        "check_embedding_ctx_length": False,
     }
     base_url = settings.embedding_base_url or settings.openai_base_url or settings.llm_base_url
     if base_url is not None:

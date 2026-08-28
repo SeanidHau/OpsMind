@@ -1,5 +1,6 @@
 """可扩展模型提供器工厂和应用自动装配的验收测试。"""
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -44,7 +45,11 @@ class FakeChatModel:
         return FakeRunnable()
 
 
-def provider_settings(provider: str, **overrides: Any) -> Settings:
+def provider_settings(
+    provider: str,
+    isolated_settings: Callable[..., Settings],
+    **overrides: Any,
+) -> Settings:
     """返回使用通用密钥的最小提供器配置。"""
     values = {
         "llm_provider": provider,
@@ -57,12 +62,14 @@ def provider_settings(provider: str, **overrides: Any) -> Settings:
         "anthropic_base_url": None,
     }
     values.update(overrides)
-    return Settings(_env_file=None, **values)
+    return isolated_settings(**values)
 
 
-def test_provider_factory_returns_none_without_provider_configuration() -> None:
+def test_provider_factory_returns_none_without_provider_configuration(
+    isolated_settings: Callable[..., Settings],
+) -> None:
     """未配置模型时，应用应保留运行 API 的不可用状态。"""
-    assert create_action_provider(Settings()) is None
+    assert create_action_provider(isolated_settings()) is None
 
 
 @pytest.mark.parametrize(
@@ -92,6 +99,7 @@ def test_provider_factory_returns_none_without_provider_configuration() -> None:
 )
 def test_provider_factory_builds_supported_models_with_shared_base_url(
     monkeypatch: pytest.MonkeyPatch,
+    isolated_settings: Callable[..., Settings],
     provider: str,
     module_path: str,
     kwargs: dict[str, object],
@@ -101,7 +109,11 @@ def test_provider_factory_builds_supported_models_with_shared_base_url(
     monkeypatch.setattr(module_path, FakeChatModel)
 
     action_provider = create_action_provider(
-        provider_settings(provider, llm_base_url="https://gateway.example.test/v1")
+        provider_settings(
+            provider,
+            isolated_settings,
+            llm_base_url="https://gateway.example.test/v1",
+        )
     )
 
     assert isinstance(action_provider, LangChainActionProvider)
@@ -133,6 +145,7 @@ def test_provider_factory_builds_supported_models_with_shared_base_url(
 )
 def test_provider_specific_configuration_overrides_shared_values(
     monkeypatch: pytest.MonkeyPatch,
+    isolated_settings: Callable[..., Settings],
     provider: str,
     overrides: dict[str, str],
     expected_key: SecretStr,
@@ -146,6 +159,7 @@ def test_provider_specific_configuration_overrides_shared_values(
     create_action_provider(
         provider_settings(
             provider,
+            isolated_settings,
             llm_api_key="shared-key",
             llm_base_url="https://shared.example.test/v1",
             **overrides,
@@ -156,7 +170,9 @@ def test_provider_specific_configuration_overrides_shared_values(
     assert FakeChatModel.instances[0].kwargs["base_url"] == expected_base_url
 
 
-def test_provider_factory_accepts_extension_registry() -> None:
+def test_provider_factory_accepts_extension_registry(
+    isolated_settings: Callable[..., Settings],
+) -> None:
     """后续厂商可通过提供器协议扩展，无需修改核心分发逻辑。"""
 
     class CustomProvider:
@@ -166,7 +182,7 @@ def test_provider_factory_accepts_extension_registry() -> None:
 
     FakeChatModel.instances = []
     action_provider = create_action_provider(
-        provider_settings("custom"),
+        provider_settings("custom", isolated_settings),
         providers={"custom": CustomProvider()},
     )
 
@@ -175,39 +191,41 @@ def test_provider_factory_accepts_extension_registry() -> None:
 
 
 @pytest.mark.parametrize(
-    ("settings", "message"),
+    ("overrides", "message"),
     [
         (
-            Settings(_env_file=None, llm_provider="unknown"),
+            {"llm_provider": "unknown"},
             "unsupported llm provider: unknown",
         ),
         (
-            Settings(_env_file=None, llm_provider="openai", llm_api_key="test-key"),
+            {"llm_provider": "openai", "llm_api_key": "test-key"},
             "llm_model is required for openai provider",
         ),
         (
-            Settings(_env_file=None, llm_provider="anthropic", llm_model="test-model"),
+            {"llm_provider": "anthropic", "llm_model": "test-model"},
             "anthropic_api_key or llm_api_key is required for anthropic provider",
         ),
     ],
 )
 def test_provider_factory_rejects_invalid_model_configuration(
-    settings: Settings,
+    isolated_settings: Callable[..., Settings],
+    overrides: dict[str, str],
     message: str,
 ) -> None:
     """未知提供器与不完整配置必须在启动时失败。"""
     with pytest.raises(ModelProviderConfigurationError, match=message):
-        create_action_provider(settings)
+        create_action_provider(isolated_settings(**overrides))
 
 
 def test_application_builds_runtime_from_configured_anthropic_provider(
     monkeypatch: pytest.MonkeyPatch,
+    isolated_settings: Callable[..., Settings],
 ) -> None:
     """应用工厂在未显式注入动作提供器时使用 Anthropic 配置完成装配。"""
     FakeChatModel.instances = []
     monkeypatch.setattr("app.diagnosis.providers.ChatAnthropic", FakeChatModel)
 
-    app = create_app(settings=provider_settings("anthropic"))
+    app = create_app(settings=provider_settings("anthropic", isolated_settings))
 
     assert isinstance(app.state.diagnosis_runner, HarnessDiagnosisRunner)
     assert len(FakeChatModel.instances) == 1
