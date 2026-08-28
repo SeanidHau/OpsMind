@@ -52,6 +52,13 @@ class ToolRegistry:
             for definition, _ in self._tools.values()
         )
 
+    def definitions(self) -> tuple[ToolDefinition, ...]:
+        """返回稳定排序的工具目录副本，供模型决策上下文使用。"""
+        return tuple(
+            definition.model_copy(deep=True)
+            for definition, _ in sorted(self._tools.values(), key=lambda item: item[0].name)
+        )
+
     async def execute(self, action: AgentAction) -> dict[str, Any]:
         """校验动作和参数后执行对应处理函数。"""
         if action.action_type is not ActionType.CALL_TOOL:

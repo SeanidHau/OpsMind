@@ -16,6 +16,8 @@ from app.models.contracts import (
     ContextSnapshot,
     ContextSource,
     ModelInvocation,
+    ToolDefinition,
+    ToolRiskLevel,
 )
 from tests.support import diagnosis_report
 
@@ -210,3 +212,42 @@ async def test_provider_rejects_state_without_built_context() -> None:
 
     with pytest.raises(ValueError, match="model_context"):
         await LangChainActionProvider(model).propose_action(state)
+
+
+@pytest.mark.asyncio
+async def test_provider_exposes_registered_tool_contracts_to_the_model() -> None:
+    """模型上下文只应包含可调用工具的名称、说明和参数约束。"""
+    model = FakeChatModel(
+        AgentAction(
+            action_type=ActionType.CALL_TOOL,
+            intent="检索故障处理知识",
+            tool_name="query_knowledge",
+            tool_args={"query": "支付超时"},
+            reason="需要参考 Runbook。",
+        )
+    )
+    provider = LangChainActionProvider(
+        model,
+        tools=(
+            ToolDefinition(
+                name="query_knowledge",
+                description="检索运维知识库。",
+                risk_level=ToolRiskLevel.LOW,
+                read_only=True,
+                required_args=("query",),
+                allowed_args=("query", "service"),
+            ),
+        ),
+    )
+
+    await provider.propose_action(make_state())
+
+    payload = json.loads(str(model.runnable.inputs[0][1].content))
+    assert payload["available_tools"] == [
+        {
+            "name": "query_knowledge",
+            "description": "检索运维知识库。",
+            "required_args": ["query"],
+            "allowed_args": ["query", "service"],
+        }
+    ]

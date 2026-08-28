@@ -10,6 +10,7 @@ from pydantic import SecretStr
 from app.agents.action_provider import LangChainActionProvider, StructuredActionChatModel
 from app.config import Settings
 from app.harness.loop import ActionProvider
+from app.models.contracts import ToolDefinition
 
 
 class ModelProviderConfigurationError(ValueError):
@@ -97,6 +98,7 @@ def create_action_provider(
     settings: Settings,
     *,
     providers: Mapping[str, ChatModelProvider] | None = None,
+    tool_definitions: tuple[ToolDefinition, ...] = (),
 ) -> ActionProvider | None:
     """根据配置创建结构化动作提供器；未配置时返回 None。"""
     if settings.llm_provider is None:
@@ -111,4 +113,7 @@ def create_action_provider(
     if provider is None:
         raise ModelProviderConfigurationError(f"unsupported llm provider: {settings.llm_provider}")
 
-    return LangChainActionProvider(provider.create_chat_model(settings))
+    return LangChainActionProvider(
+        provider.create_chat_model(settings),
+        tools=tool_definitions,
+    )

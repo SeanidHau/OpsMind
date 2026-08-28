@@ -67,7 +67,7 @@ def create_app(
     resolved_settings = settings or get_settings()
     configure_logging(log_level=resolved_settings.log_level)
 
-    resolved_action_provider = action_provider or create_action_provider(resolved_settings)
+    resolved_action_provider = action_provider
     resolved_run_archive = run_archive or create_run_archive(resolved_settings)
     resolved_knowledge_searcher = knowledge_searcher or create_knowledge_searcher(resolved_settings)
 
@@ -107,6 +107,11 @@ def create_app(
     if resolved_knowledge_searcher is not None:
         register_knowledge_tools(tool_registry, resolved_knowledge_searcher)
     app.state.tool_registry = tool_registry
+    if resolved_action_provider is None:
+        resolved_action_provider = create_action_provider(
+            resolved_settings,
+            tool_definitions=tool_registry.definitions(),
+        )
     app.state.diagnosis_runner = diagnosis_runner or (
         create_harness_diagnosis_runner(
             action_provider=resolved_action_provider,

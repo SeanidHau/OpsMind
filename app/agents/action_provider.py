@@ -12,6 +12,7 @@ from app.models.contracts import (
     DiagnosisState,
     ModelInvocation,
     ModelUsage,
+    ToolDefinition,
 )
 
 
@@ -57,6 +58,9 @@ class LangChainActionProvider:
     report.evidence_ids 只能引用 context 中形如 evidence:<evidence_id> 的条目，
     并且写入时应去掉 evidence: 前缀。
     不要引用未出现在 context 中的证据 ID。
+
+    选择 call_tool 时，只能使用 available_tools 中的 name，并且 tool_args 必须符合
+    对应工具的 required_args 和 allowed_args。
     """
 
     def __init__(
@@ -65,6 +69,7 @@ class LangChainActionProvider:
         *,
         input_cost_per_1k_tokens: float = 0.0,
         output_cost_per_1k_tokens: float = 0.0,
+        tools: tuple[ToolDefinition, ...] = (),
     ) -> None:
         """绑定结构化动作模型和可选的 Token 价格配置。"""
         if input_cost_per_1k_tokens < 0:
@@ -74,6 +79,15 @@ class LangChainActionProvider:
 
         self._input_cost_per_1k_tokens = input_cost_per_1k_tokens
         self._output_cost_per_1k_tokens = output_cost_per_1k_tokens
+        self._tools = tuple(
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "required_args": tool.required_args,
+                "allowed_args": tool.allowed_args,
+            }
+            for tool in tools
+        )
         # include_raw=True 用于从 AIMessage 中提取供应商实际用量。
         self._action_runnable = chat_model.with_structured_output(
             AgentAction,
@@ -98,6 +112,7 @@ class LangChainActionProvider:
             "replan_correction_count": state.get("replan_correction_count", 0),
             "replan_count": state.get("replan_count", 0),
             "question_count": state.get("question_count", 0),
+            "available_tools": self._tools,
         }
         messages: list[BaseMessage] = [
             SystemMessage(content=self._SYSTEM_INSTRUCTION),
