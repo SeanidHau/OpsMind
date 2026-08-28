@@ -6,7 +6,7 @@ from enum import StrEnum
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AnyHttpUrl, PostgresDsn, SecretStr, field_validator
+from pydantic import AnyHttpUrl, Field, PostgresDsn, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,6 +50,15 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     anthropic_base_url: AnyHttpUrl | None = None
 
+    # RAG Embedding 使用 OpenAI 兼容接口；未配置模型时不注册知识检索工具。
+    embedding_model: str | None = None
+    embedding_api_key: SecretStr | None = None
+    embedding_base_url: AnyHttpUrl | None = None
+    embedding_vector_size: int = Field(default=1_536, gt=0)
+    knowledge_collection_name: str = Field(
+        default="opsmind_knowledge", min_length=1, max_length=255
+    )
+
     # LangSmith 默认关闭；后续评测阶段再按配置启用。
     langsmith_tracing: bool = False
     langsmith_api_key: SecretStr | None = None
@@ -64,6 +73,9 @@ class Settings(BaseSettings):
         "openai_base_url",
         "anthropic_api_key",
         "anthropic_base_url",
+        "embedding_model",
+        "embedding_api_key",
+        "embedding_base_url",
         "langsmith_api_key",
         mode="before",
     )

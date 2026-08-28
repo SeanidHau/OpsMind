@@ -1,9 +1,11 @@
 """FastAPI 应用工厂与 ASGI 入口。"""
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from pymilvus import MilvusClient  # type: ignore[import-untyped]
 
 from app.api.middleware import RequestContextMiddleware
 from app.api.routers.runs import router as runs_router
@@ -18,7 +20,11 @@ from app.diagnosis.runtime import create_harness_diagnosis_runner
 from app.harness.loop import ActionProvider
 from app.harness.snapshot import InMemoryRunArchive, PostgresRunArchive, RunArchive
 from app.observability.logging import configure_logging
+from app.rag.embeddings import create_embedding_client
+from app.rag.milvus_store import MilvusVectorStore
+from app.rag.search import KnowledgeSearcher
 from app.scenarios.defaults import create_default_scenario_store
+from app.tools.knowledge import register_knowledge_tools
 from app.tools.registry import ToolRegistry
 from app.tools.scenarios import ScenarioStore, register_scenario_tools
 
@@ -30,6 +36,21 @@ def create_run_archive(settings: Settings) -> RunArchive:
     return InMemoryRunArchive()
 
 
+def create_knowledge_searcher(settings: Settings) -> KnowledgeSearcher | None:
+    """配置 Embedding 后创建与 Milvus 集合匹配的检索器。"""
+    embedder = create_embedding_client(settings)
+    if embedder is None:
+        return None
+    return KnowledgeSearcher(
+        embedder=embedder,
+        vector_store=MilvusVectorStore(
+            client=MilvusClient(uri=str(settings.milvus_url)),
+            collection_name=settings.knowledge_collection_name,
+            vector_size=settings.embedding_vector_size,
+        ),
+    )
+
+
 def create_app(
     *,
     settings: Settings | None = None,
@@ -37,6 +58,7 @@ def create_app(
     diagnosis_runner: DiagnosisRunner | None = None,
     action_provider: ActionProvider | None = None,
     run_archive: RunArchive | None = None,
+    knowledge_searcher: KnowledgeSearcher | None = None,
 ) -> FastAPI:
     """创建应用实例，并注入可替换的配置供后续依赖使用。"""
     if diagnosis_runner is not None and action_provider is not None:
@@ -47,6 +69,7 @@ def create_app(
 
     resolved_action_provider = action_provider or create_action_provider(resolved_settings)
     resolved_run_archive = run_archive or create_run_archive(resolved_settings)
+    resolved_knowledge_searcher = knowledge_searcher or create_knowledge_searcher(resolved_settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -57,6 +80,8 @@ def create_app(
         finally:
             if isinstance(resolved_run_archive, PostgresRunArchive):
                 await resolved_run_archive.close()
+            if resolved_knowledge_searcher is not None:
+                await asyncio.to_thread(resolved_knowledge_searcher.close)
 
     app = FastAPI(
         title="OpsMind API",
@@ -72,12 +97,15 @@ def create_app(
     # 保存解析后的配置；路由层不应自行读取环境变量。
     app.state.settings = resolved_settings
     app.state.run_archive = resolved_run_archive
+    app.state.knowledge_searcher = resolved_knowledge_searcher
 
     app.state.scenario_store = scenario_store or create_default_scenario_store()
 
     # 每个应用实例使用独立注册表；工具与场景存储保持同一注入来源。
     tool_registry = ToolRegistry()
     register_scenario_tools(tool_registry, app.state.scenario_store)
+    if resolved_knowledge_searcher is not None:
+        register_knowledge_tools(tool_registry, resolved_knowledge_searcher)
     app.state.tool_registry = tool_registry
     app.state.diagnosis_runner = diagnosis_runner or (
         create_harness_diagnosis_runner(

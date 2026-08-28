@@ -5,7 +5,13 @@ from starlette.requests import Request
 
 from app.api.dependencies import get_tool_registry
 from app.api.main import create_app
-from app.models.contracts import ActionType, AgentAction, IncidentScenario, ScenarioLog
+from app.models.contracts import (
+    ActionType,
+    AgentAction,
+    IncidentScenario,
+    RetrievalHit,
+    ScenarioLog,
+)
 from app.tools.registry import ToolRegistry
 from app.tools.scenarios import ScenarioStore
 
@@ -40,6 +46,23 @@ def metrics_action(service: str) -> AgentAction:
         tool_args={"service": service},
         reason="收集诊断证据",
     )
+
+
+class FakeKnowledgeSearcher:
+    """验证应用工厂注册知识工具的最小检索替身。"""
+
+    def search(
+        self,
+        query: str,
+        *,
+        top_k: int = 3,
+        metadata_filter: dict[str, str] | None = None,
+    ) -> list[RetrievalHit]:
+        del query, top_k, metadata_filter
+        return []
+
+    def close(self) -> None:
+        pass
 
 
 @pytest.mark.asyncio
@@ -77,6 +100,13 @@ async def test_application_instances_do_not_share_scenario_tool_registries() -> 
     assert (await second_registry.execute(metrics_action("second-service")))["metrics"] == {
         "error_rate": 0.22
     }
+
+
+def test_application_registers_knowledge_tool_when_searcher_is_injected() -> None:
+    """已装配检索器时，Harness 工具目录必须公开知识检索能力。"""
+    app = create_app(knowledge_searcher=FakeKnowledgeSearcher())
+
+    assert "query_knowledge" in {policy.name for policy in app.state.tool_registry.policies()}
 
 
 def test_tool_registry_dependency_returns_the_application_registry() -> None:

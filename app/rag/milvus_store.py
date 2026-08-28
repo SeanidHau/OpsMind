@@ -76,6 +76,10 @@ class MilvusVectorStore:
             for rank, point in enumerate(positive_points, start=1)
         ]
 
+    def close(self) -> None:
+        """关闭底层 Milvus 客户端连接。"""
+        self._client.close()
+
     def _ensure_collection(self) -> None:
         """仅在集合不存在时创建固定 schema 与余弦索引。"""
         if self._client.has_collection(collection_name=self._collection_name):
