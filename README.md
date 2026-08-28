@@ -238,3 +238,7 @@ uv run mypy app
 ## Git 提交约定
 
 每个可验证的阶段成果创建一次提交。初始化阶段、Harness Core、RAG 与工具层、API 与持久化、前端与评测分别提交；不为零散文件修改单独提交。
+
+## CI
+
+推送到 `main` 或创建 Pull Request 时，GitHub Actions 会并行执行 Python 与 Rust 验收。Python 任务检查依赖锁、测试、Ruff、mypy 和 Docker Compose 配置；Rust 任务检查格式、测试和编译。需要模型凭据或外部服务的端到端基准不在 CI 中执行。
