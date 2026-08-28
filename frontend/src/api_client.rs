@@ -1,11 +1,14 @@
-//! OpsMind FastAPI 的只读桌面端客户端。
+//! OpsMind FastAPI 的桌面端客户端。
 
-use std::{fmt, time::Duration};
+use std::{fmt, io::Read, time::Duration};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use crate::sse::{ServerSentEvent, SseDecoder};
 
 const API_PREFIX: &str = "/api/v1";
 const MAX_RESPONSE_BYTES: u64 = 512 * 1024;
+const MAX_STREAM_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HealthStatus {
@@ -20,6 +23,14 @@ pub struct ScenarioSummary {
     pub log_count: u32,
     pub metric_names: Vec<String>,
     pub dependency_count: u32,
+}
+
+/// 创建一次实时诊断运行所需的公开请求字段。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StreamDiagnosisRequest {
+    pub session_id: String,
+    pub thread_id: String,
+    pub user_query: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +100,57 @@ impl OpsMindApiClient {
         self.get_json("/scenarios")
     }
 
+    /// 创建诊断运行，并在读取到每个完整 SSE 事件时立即回调。
+    pub fn stream_diagnosis(
+        &self,
+        request: &StreamDiagnosisRequest,
+        mut on_event: impl FnMut(ServerSentEvent),
+    ) -> Result<(), ApiClientError> {
+        let body = serde_json::to_string(request)
+            .map_err(|error| ApiClientError::InvalidResponse(error.to_string()))?;
+        let url = format!("{}{API_PREFIX}/runs/stream", self.base_url);
+        let mut response = self
+            .agent
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .send(&body)
+            .map_err(|error| ApiClientError::Request(error.to_string()))?;
+        let mut reader = response.body_mut().as_reader();
+        let mut decoder = SseDecoder::new();
+        let mut buffer = [0_u8; 4096];
+        let mut received_bytes = 0_usize;
+
+        loop {
+            let size = reader
+                .read(&mut buffer)
+                .map_err(|error| ApiClientError::Request(error.to_string()))?;
+            if size == 0 {
+                break;
+            }
+            received_bytes += size;
+            if received_bytes > MAX_STREAM_BYTES {
+                return Err(ApiClientError::InvalidResponse(String::from(
+                    "SSE response exceeded the maximum allowed size",
+                )));
+            }
+
+            let chunk = std::str::from_utf8(&buffer[..size])
+                .map_err(|error| ApiClientError::InvalidResponse(error.to_string()))?;
+            for event in decoder
+                .push(chunk)
+                .map_err(ApiClientError::InvalidResponse)?
+            {
+                on_event(event);
+            }
+        }
+
+        for event in decoder.finish().map_err(ApiClientError::InvalidResponse)? {
+            on_event(event);
+        }
+        Ok(())
+    }
+
     fn get_json<T>(&self, path: &str) -> Result<T, ApiClientError>
     where
         T: for<'de> Deserialize<'de>,
@@ -120,7 +182,7 @@ mod tests {
         thread,
     };
 
-    use super::OpsMindApiClient;
+    use super::{OpsMindApiClient, StreamDiagnosisRequest};
 
     fn serve_once(body: &str) -> (String, Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
@@ -130,9 +192,7 @@ mod tests {
 
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept request");
-            let mut request = [0_u8; 2048];
-            let size = stream.read(&mut request).expect("read request");
-            let _ = sender.send(String::from_utf8_lossy(&request[..size]).into_owned());
+            let _ = sender.send(read_http_request(&mut stream));
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len(),
@@ -143,6 +203,33 @@ mod tests {
         });
 
         (format!("http://{address}"), receiver)
+    }
+
+    fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 2048];
+
+        loop {
+            let size = stream.read(&mut buffer).expect("read request");
+            request.extend_from_slice(&buffer[..size]);
+            let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+            else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then_some(value.trim())
+                })
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
+                return String::from_utf8_lossy(&request).into_owned();
+            }
+        }
     }
 
     #[test]
@@ -192,5 +279,35 @@ mod tests {
             .expect_err("wrong service must be rejected");
 
         assert!(error.to_string().contains("does not identify"));
+    }
+
+    #[test]
+    fn posts_a_diagnosis_request_and_streams_safe_events() {
+        let (base_url, requests) = serve_once(concat!(
+            "event: run_started\n",
+            "data: {\"run_id\":\"run-1\"}\n\n",
+            "event: run_finished\n",
+            "data: {\"run_id\":\"run-1\",\"status\":\"completed\"}\n\n",
+        ));
+        let mut event_names = Vec::new();
+
+        OpsMindApiClient::new(base_url)
+            .stream_diagnosis(
+                &StreamDiagnosisRequest {
+                    session_id: String::from("desktop-session"),
+                    thread_id: String::from("desktop-thread"),
+                    user_query: String::from("checkout latency increased"),
+                },
+                |event| event_names.push(event.name),
+            )
+            .expect("stream diagnosis");
+
+        assert_eq!(event_names, ["run_started", "run_finished"]);
+        let request = requests.recv().expect("captured request");
+        assert!(request.starts_with("POST /api/v1/runs/stream HTTP/1.1"));
+        assert!(
+            request.contains("\"user_query\":\"checkout latency increased\""),
+            "unexpected request: {request}"
+        );
     }
 }
