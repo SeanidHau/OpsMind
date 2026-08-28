@@ -1,0 +1,26 @@
+[
+  {
+    "case_id": "order-http-5xx",
+    "query": "订单服务上游 502 导致 HTTP 5xx",
+    "expected_source_id": "order-http-5xx-runbook",
+    "metadata_filter": {"service": "order-service"}
+  },
+  {
+    "case_id": "payment-connection-pool",
+    "query": "支付服务连接池耗尽请求超时",
+    "expected_source_id": "payment-connection-pool-runbook",
+    "metadata_filter": {"service": "payment-service"}
+  },
+  {
+    "case_id": "inventory-latency",
+    "query": "库存服务 P99 延迟升高",
+    "expected_source_id": "inventory-latency-runbook",
+    "metadata_filter": {"service": "inventory-service"}
+  },
+  {
+    "case_id": "recommendation-redis-cache",
+    "query": "推荐服务 Redis 缓存命中率下降并超时",
+    "expected_source_id": "recommendation-redis-cache-runbook",
+    "metadata_filter": {"service": "recommendation-service"}
+  }
+]

@@ -115,6 +115,16 @@ uv run python -m scripts.ingest_knowledge
 
 `EMBEDDING_VECTOR_SIZE` 必须与 Embedding 模型输出维度一致。应用和脚本必须使用同一个 `KNOWLEDGE_SOURCE_DIRECTORY`。脚本按文件名顺序读取 Markdown，并使用 Milvus upsert，因此可以重复运行。
 
+### 评测混合检索
+
+入库后可使用固定的四条样本评测当前知识检索质量：
+
+```bash
+uv run python -m scripts.evaluate_retrieval
+```
+
+该命令只读取 Milvus，输出 JSON 格式的 `recall_at_k`、`mean_reciprocal_rank` 和每条样本的预期及实际来源。可通过 `--cases-file` 指定其他 JSON 样本文件，或通过 `--top-k` 调整返回数量。
+
 ### 启动 GPUI 桌面工作台
 
 先启动 FastAPI 服务。配置模型供应商后，工作台才能创建真实诊断运行。

@@ -656,6 +656,41 @@ class EvaluationCase(BaseModel):
     expected_evidence_tools: tuple[str, ...] = ()
 
 
+class RetrievalEvaluationCase(BaseModel):
+    """一个带预期知识来源的离线检索评测样本。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    case_id: str = Field(min_length=1, max_length=100)
+    query: str = Field(min_length=1, max_length=4_000)
+    expected_source_id: str = Field(min_length=1, max_length=200)
+    metadata_filter: dict[str, str] = Field(default_factory=dict)
+
+
+class RetrievalCaseResult(BaseModel):
+    """单个检索评测样本的命中来源与首次命中排名。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    case_id: str = Field(min_length=1, max_length=100)
+    expected_source_id: str = Field(min_length=1, max_length=200)
+    retrieved_source_ids: list[str]
+    rank: int | None = Field(default=None, ge=1)
+
+
+class RetrievalEvaluation(BaseModel):
+    """一批固定样本的 Recall@K 和 MRR 汇总结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    passed: bool
+    recall_at_k: float = Field(ge=0, le=1)
+    mean_reciprocal_rank: float = Field(ge=0, le=1)
+    top_k: int = Field(gt=0)
+    case_results: list[RetrievalCaseResult] = Field(min_length=1)
+    evaluated_at: datetime = Field(default_factory=utc_now)
+
+
 class BenchmarkCaseResult(BaseModel):
     """单个评测样本的轨迹和业务期望检查结果。"""
 
@@ -777,6 +812,9 @@ __all__ = [
     "ProgressStatus",
     "ReplayMode",
     "ReplayResult",
+    "RetrievalCaseResult",
+    "RetrievalEvaluation",
+    "RetrievalEvaluationCase",
     "RetrievalHit",
     "RunSnapshot",
     "ScenarioLog",
