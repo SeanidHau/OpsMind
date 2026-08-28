@@ -5,6 +5,7 @@ edition = "2024"
 description = "GPUI desktop console for the OpsMind agent harness."
 
 [dependencies]
+async-channel = "2.5"
 gpui = "=0.2.2"
 gpui-component = "=0.5.1"
 serde = { version = "1.0", features = ["derive"] }

@@ -95,6 +95,7 @@ impl SseDecoder {
 /// 解析 `text/event-stream` 负载中的事件。
 ///
 /// 只接受对象形式的 JSON 数据，避免桌面端把非结构化或意外响应写入运行时间线。
+#[cfg(test)]
 pub fn parse_events(payload: &str) -> Result<Vec<ServerSentEvent>, String> {
     let mut decoder = SseDecoder::new();
     let mut events = decoder.push(payload)?;

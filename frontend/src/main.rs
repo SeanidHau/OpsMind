@@ -1,13 +1,12 @@
 //! OpsMind 的 GPUI 桌面控制台入口。
 
-use std::env;
+use std::{
+    env,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-/// 在后续阶段由 GPUI 网络适配器调用的安全 SSE 解析器。
-#[allow(dead_code)]
 mod sse;
 
-/// 负责读取后端健康状态和场景摘要的只读客户端。
-#[allow(dead_code)]
 mod api_client;
 
 use gpui::{
@@ -20,16 +19,24 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
 };
 
-use crate::api_client::OpsMindApiClient;
+use crate::{
+    api_client::{OpsMindApiClient, StreamDiagnosisRequest},
+    sse::ServerSentEvent,
+};
 
 const DEFAULT_API_BASE_URL: &str = "http://127.0.0.1:8000";
+const MAX_TRAJECTORY_ENTRIES: usize = 12;
 
 struct OpsMindConsole {
     api_base_url: String,
+    session_id: String,
+    thread_id: String,
     connection: ConnectionState,
     catalog: CatalogState,
     diagnosis_input: Entity<InputState>,
     submission: SubmissionState,
+    run: RunState,
+    trajectory: Vec<String>,
     _input_subscription: Subscription,
 }
 
@@ -49,6 +56,18 @@ enum SubmissionState {
     Draft,
     Invalid,
     Prepared { query: String },
+}
+
+enum RunState {
+    Idle,
+    Running { event_count: usize },
+    Finished { status: String, step_count: usize },
+    Failed,
+}
+
+enum StreamUpdate {
+    Event(ServerSentEvent),
+    Closed { succeeded: bool },
 }
 
 struct BootstrapSnapshot {
@@ -71,7 +90,7 @@ impl OpsMindConsole {
                     cx.notify();
                 }
                 InputEvent::PressEnter { secondary: true } => {
-                    console.prepare_diagnosis(input.read(cx).value().to_string(), cx);
+                    console.start_diagnosis(input.read(cx).value().to_string(), cx);
                 }
                 InputEvent::PressEnter { secondary: false }
                 | InputEvent::Focus
@@ -80,10 +99,14 @@ impl OpsMindConsole {
         let mut console = Self {
             api_base_url: env::var("OPSMIND_API_BASE_URL")
                 .unwrap_or_else(|_| String::from(DEFAULT_API_BASE_URL)),
+            session_id: desktop_identifier("session"),
+            thread_id: desktop_identifier("thread"),
             connection: ConnectionState::Checking,
             catalog: CatalogState::Waiting,
             diagnosis_input,
             submission: SubmissionState::Draft,
+            run: RunState::Idle,
+            trajectory: Vec::new(),
             _input_subscription: input_subscription,
         };
         console.refresh_backend_status(cx);
@@ -144,25 +167,104 @@ impl OpsMindConsole {
     }
 
     fn submit_diagnosis(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.prepare_diagnosis(self.diagnosis_input.read(cx).value().to_string(), cx);
+        self.start_diagnosis(self.diagnosis_input.read(cx).value().to_string(), cx);
     }
 
-    /// 保存已校验的诊断意图，等待下一阶段的 SSE 传输层发送。
-    fn prepare_diagnosis(&mut self, raw_query: String, cx: &mut Context<Self>) {
-        self.submission = match normalize_diagnosis_query(&raw_query) {
-            Ok(query) => SubmissionState::Prepared { query },
-            Err(()) => SubmissionState::Invalid,
+    /// 启动后台 SSE 请求，并将安全事件转交给 GPUI 主线程。
+    fn start_diagnosis(&mut self, raw_query: String, cx: &mut Context<Self>) {
+        if !self.backend_is_ready() || self.is_running() {
+            return;
+        }
+        let query = match normalize_diagnosis_query(&raw_query) {
+            Ok(query) => query,
+            Err(()) => {
+                self.submission = SubmissionState::Invalid;
+                cx.notify();
+                return;
+            }
         };
+
+        self.submission = SubmissionState::Prepared {
+            query: query.clone(),
+        };
+        self.run = RunState::Running { event_count: 0 };
+        self.trajectory.clear();
         cx.notify();
+
+        let request = StreamDiagnosisRequest {
+            session_id: self.session_id.clone(),
+            thread_id: self.thread_id.clone(),
+            user_query: query,
+        };
+        let api_base_url = self.api_base_url.clone();
+        let (sender, receiver) = async_channel::unbounded();
+        cx.background_executor()
+            .spawn(async move {
+                let event_sender = sender.clone();
+                let result =
+                    OpsMindApiClient::new(api_base_url).stream_diagnosis(&request, |event| {
+                        let _ = event_sender.send_blocking(StreamUpdate::Event(event));
+                    });
+                let _ = sender.send_blocking(StreamUpdate::Closed {
+                    succeeded: result.is_ok(),
+                });
+            })
+            .detach();
+
+        let this = cx.weak_entity();
+        let mut async_cx = cx.to_async();
+        cx.foreground_executor()
+            .spawn(async move {
+                while let Ok(update) = receiver.recv().await {
+                    let _ = this.update(&mut async_cx, |console, cx| {
+                        console.apply_stream_update(update);
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+    }
+
+    fn apply_stream_update(&mut self, update: StreamUpdate) {
+        match update {
+            StreamUpdate::Event(event) => self.apply_stream_event(event),
+            StreamUpdate::Closed { succeeded } if !succeeded && self.is_running() => {
+                self.run = RunState::Failed;
+            }
+            StreamUpdate::Closed { .. } => {}
+        }
+    }
+
+    fn apply_stream_event(&mut self, event: ServerSentEvent) {
+        match event.name.as_str() {
+            "run_started" => self.run = RunState::Running { event_count: 0 },
+            "run_finished" => {
+                let status = safe_status(&event.data).unwrap_or_else(|| String::from("unknown"));
+                let step_count = event.data["step_count"].as_u64().unwrap_or_default() as usize;
+                self.run = RunState::Finished { status, step_count };
+            }
+            "run_failed" => self.run = RunState::Failed,
+            event_name => {
+                if let Some(entry) = trajectory_entry(event_name, &event.data) {
+                    if let RunState::Running { event_count } = &mut self.run {
+                        *event_count += 1;
+                    }
+                    self.trajectory.push(entry);
+                    if self.trajectory.len() > MAX_TRAJECTORY_ENTRIES {
+                        self.trajectory.remove(0);
+                    }
+                }
+            }
+        }
     }
 
     fn submission_detail(&self) -> String {
         match &self.submission {
-            SubmissionState::Draft => String::from("填写描述后按 ⌘↵ 准备诊断。"),
+            SubmissionState::Draft => String::from("填写描述后按 ⌘↵ 或点击按钮开始诊断。"),
             SubmissionState::Invalid => String::from("诊断描述不能为空，且不得超过 4000 个字符。"),
             SubmissionState::Prepared { query } => {
                 format!(
-                    "已准备 {} 个字符的诊断描述，等待启动流式运行。",
+                    "正在使用 {} 个字符的诊断描述进行流式诊断。",
                     query.chars().count()
                 )
             }
@@ -170,7 +272,24 @@ impl OpsMindConsole {
     }
 
     fn backend_is_ready(&self) -> bool {
-        matches!(self.connection, ConnectionState::Ready { .. })
+        matches!(&self.connection, ConnectionState::Ready { .. })
+    }
+
+    fn is_running(&self) -> bool {
+        matches!(&self.run, RunState::Running { .. })
+    }
+
+    fn run_detail(&self) -> String {
+        match &self.run {
+            RunState::Idle => String::from("等待诊断运行事件。"),
+            RunState::Running { event_count } => {
+                format!("正在接收安全轨迹事件：{event_count} 条。")
+            }
+            RunState::Finished { status, step_count } => {
+                format!("运行结束 · {status} · {step_count} 个步骤")
+            }
+            RunState::Failed => String::from("运行未完成。请检查后端服务后重试。"),
+        }
     }
 }
 
@@ -180,6 +299,66 @@ fn normalize_diagnosis_query(raw_query: &str) -> Result<String, ()> {
         return Err(());
     }
     Ok(query.to_owned())
+}
+
+fn desktop_identifier(kind: &str) -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    format!("desktop-{kind}-{timestamp}")
+}
+
+fn safe_status(data: &serde_json::Value) -> Option<String> {
+    match data["status"].as_str()? {
+        "completed" | "blocked" | "waiting_approval" | "waiting_user_input" | "stalled"
+        | "failed" => Some(data["status"].as_str()?.to_owned()),
+        _ => None,
+    }
+}
+
+fn trajectory_entry(event_name: &str, data: &serde_json::Value) -> Option<String> {
+    let event_type = data["event_type"].as_str()?;
+    if event_type != event_name || !is_safe_trajectory_event(event_name) {
+        return None;
+    }
+
+    let step_id = data["step_id"].as_u64()?;
+    let tool_name = data["tool_name"].as_str();
+    let latency_ms = data["latency_ms"].as_u64();
+    let mut entry = format!("#{step_id} · {event_name}");
+    if let Some(tool_name) = tool_name {
+        entry.push_str(&format!(" · {tool_name}"));
+    }
+    if let Some(latency_ms) = latency_ms {
+        entry.push_str(&format!(" · {latency_ms} ms"));
+    }
+    Some(entry)
+}
+
+fn is_safe_trajectory_event(event_name: &str) -> bool {
+    matches!(
+        event_name,
+        "plan_created"
+            | "context_built"
+            | "model_called"
+            | "model_retry"
+            | "action_proposed"
+            | "action_blocked"
+            | "tool_started"
+            | "tool_finished"
+            | "tool_retry"
+            | "observation_recorded"
+            | "verification_failed"
+            | "context_compressed"
+            | "checkpoint_saved"
+            | "run_paused"
+            | "run_resumed"
+            | "run_completed"
+            | "run_failed"
+            | "evidence_collected"
+            | "plan_revised"
+    )
 }
 
 fn load_bootstrap_snapshot(api_base_url: String) -> Result<BootstrapSnapshot, ()> {
@@ -232,7 +411,7 @@ impl Render for OpsMindConsole {
                             .gap(px(16.0))
                             .child(panel("CONNECTION", &self.connection_detail()))
                             .child(panel("SCENARIO CATALOG", &self.catalog_detail()))
-                            .child(panel("LIVE TRAJECTORY", "等待诊断运行事件。")),
+                            .child(trajectory_panel(&self.run_detail(), &self.trajectory)),
                     )
                     .child(
                         div()
@@ -255,9 +434,10 @@ impl Render for OpsMindConsole {
                                     )
                                     .child(
                                         Button::new("prepare-diagnosis")
-                                            .label("准备诊断")
+                                            .label("开始诊断")
                                             .primary()
-                                            .disabled(!self.backend_is_ready())
+                                            .loading(self.is_running())
+                                            .disabled(!self.backend_is_ready() || self.is_running())
                                             .on_click(cx.listener(Self::submit_diagnosis)),
                                     ),
                             ),
@@ -278,6 +458,27 @@ fn panel(title: &'static str, detail: &str) -> impl IntoElement {
         .child(div().child(detail.to_owned()))
 }
 
+fn trajectory_panel(detail: &str, entries: &[String]) -> impl IntoElement {
+    let mut panel = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .p(px(18.0))
+        .gap(px(8.0))
+        .bg(rgb(0x111a20))
+        .child(div().text_color(rgb(0xffb000)).child("LIVE TRAJECTORY"))
+        .child(div().text_color(rgb(0xaab6bc)).child(detail.to_owned()));
+
+    if entries.is_empty() {
+        panel = panel.child(div().child("尚无安全轨迹事件。"));
+    } else {
+        for entry in entries.iter().rev().take(3).rev() {
+            panel = panel.child(div().text_size(px(12.0)).child(entry.clone()));
+        }
+    }
+    panel
+}
+
 fn main() {
     Application::new().run(|cx: &mut App| {
         gpui_component::init(cx);
@@ -295,7 +496,9 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_diagnosis_query;
+    use serde_json::json;
+
+    use super::{normalize_diagnosis_query, trajectory_entry};
 
     #[test]
     fn normalizes_a_diagnosis_query() {
@@ -308,5 +511,33 @@ mod tests {
     fn rejects_blank_and_oversized_diagnosis_queries() {
         assert!(normalize_diagnosis_query(" \n ").is_err());
         assert!(normalize_diagnosis_query(&"x".repeat(4_001)).is_err());
+    }
+
+    #[test]
+    fn trajectory_projection_excludes_extra_event_fields() {
+        let entry = trajectory_entry(
+            "tool_finished",
+            &json!({
+                "event_type": "tool_finished",
+                "step_id": 4,
+                "tool_name": "query_metrics",
+                "latency_ms": 18,
+                "observation": "credentials=secret",
+            }),
+        )
+        .expect("safe trajectory event");
+
+        assert_eq!(entry, "#4 · tool_finished · query_metrics · 18 ms");
+        assert!(!entry.contains("secret"));
+    }
+
+    #[test]
+    fn trajectory_projection_rejects_unknown_event_names() {
+        let entry = trajectory_entry(
+            "untrusted_event",
+            &json!({"event_type": "untrusted_event", "step_id": 1}),
+        );
+
+        assert!(entry.is_none());
     }
 }
