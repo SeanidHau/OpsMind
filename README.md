@@ -97,6 +97,23 @@ ANTHROPIC_BASE_URL=https://your-compatible-endpoint
 
 供应商专用密钥优先于 `LLM_API_KEY`。未配置模型供应商时，健康检查和场景目录仍可使用；创建诊断运行会返回 `503`。
 
+### 导入演示知识库
+
+`data/knowledge/` 包含四份与预设故障场景对应的模拟 Runbook。启动 Milvus 并配置 OpenAI 兼容 Embedding 后，执行以下命令：
+
+```dotenv
+EMBEDDING_MODEL=your-embedding-model
+EMBEDDING_API_KEY=your-api-key
+EMBEDDING_VECTOR_SIZE=1536
+```
+
+```bash
+docker compose up -d milvus
+uv run python -m scripts.ingest_knowledge
+```
+
+`EMBEDDING_VECTOR_SIZE` 必须与 Embedding 模型输出维度一致。脚本按文件名顺序读取 Markdown，并使用 Milvus upsert，因此可以重复运行。
+
 ### 启动 GPUI 桌面工作台
 
 先启动 FastAPI 服务。配置模型供应商后，工作台才能创建真实诊断运行。
