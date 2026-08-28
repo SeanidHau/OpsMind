@@ -83,9 +83,13 @@ class PostgresRunArchive:
             async with self._engine.begin() as connection:
                 await connection.execute(
                     text(
-                        "INSERT INTO run_snapshots (run_id, snapshot) VALUES (:run_id, :snapshot)"
+                        "INSERT INTO run_snapshots (run_id, snapshot) "
+                        "VALUES (:run_id, CAST(:snapshot AS JSONB))"
                     ),
-                    {"run_id": snapshot.run_id, "snapshot": snapshot.model_dump(mode="json")},
+                    {
+                        "run_id": snapshot.run_id,
+                        "snapshot": json.dumps(snapshot.model_dump(mode="json")),
+                    },
                 )
         except IntegrityError as error:
             raise ValueError(f"snapshot already exists for run: {snapshot.run_id}") from error
@@ -107,8 +111,14 @@ class PostgresRunArchive:
         """替换已存在快照，避免把恢复调用意外变成新运行。"""
         async with self._engine.begin() as connection:
             result = await connection.execute(
-                text("UPDATE run_snapshots SET snapshot = :snapshot WHERE run_id = :run_id"),
-                {"run_id": snapshot.run_id, "snapshot": snapshot.model_dump(mode="json")},
+                text(
+                    "UPDATE run_snapshots SET snapshot = CAST(:snapshot AS JSONB) "
+                    "WHERE run_id = :run_id"
+                ),
+                {
+                    "run_id": snapshot.run_id,
+                    "snapshot": json.dumps(snapshot.model_dump(mode="json")),
+                },
             )
         if result.rowcount != 1:
             raise KeyError(f"snapshot not found for run: {snapshot.run_id}")
