@@ -39,6 +39,21 @@ pub struct ResumeDiagnosisRequest {
     pub answer: String,
 }
 
+/// 等待审批时可公开展示的最小摘要。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingApprovalSummary {
+    pub tool_name: String,
+    pub reason: String,
+}
+
+/// 高风险工具的人工审批决议。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ApprovalRequest {
+    pub decision: String,
+    pub reason: String,
+}
+
 /// 运行接口返回的最小安全摘要。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,6 +63,7 @@ pub struct DiagnosisRunSummary {
     pub step_count: usize,
     pub final_answer: Option<String>,
     pub pending_question: Option<String>,
+    pub pending_approval: Option<PendingApprovalSummary>,
     pub errors: Vec<String>,
 }
 
@@ -175,9 +191,48 @@ impl OpsMindApiClient {
         run_id: &str,
         request: &ResumeDiagnosisRequest,
     ) -> Result<DiagnosisRunSummary, ApiClientError> {
+        self.post_json(&format!("/runs/{run_id}/input"), request)
+    }
+
+    /// 记录高风险工具的审批决议，不在当前请求执行工具。
+    pub fn resolve_approval(
+        &self,
+        run_id: &str,
+        request: &ApprovalRequest,
+    ) -> Result<DiagnosisRunSummary, ApiClientError> {
+        self.post_json(&format!("/runs/{run_id}/approval"), request)
+    }
+
+    /// 从已记录的批准决议恢复同一条诊断运行。
+    pub fn resume_approved(&self, run_id: &str) -> Result<DiagnosisRunSummary, ApiClientError> {
+        let url = format!(
+            "{}{API_PREFIX}/runs/{run_id}/approval/resume",
+            self.base_url
+        );
+        let mut response = self
+            .agent
+            .post(&url)
+            .header("Accept", "application/json")
+            .send_empty()
+            .map_err(|error| ApiClientError::Request(error.to_string()))?;
+        let response_body = response
+            .body_mut()
+            .with_config()
+            .limit(MAX_RESPONSE_BYTES)
+            .read_to_string()
+            .map_err(|error| ApiClientError::Request(error.to_string()))?;
+
+        serde_json::from_str(&response_body)
+            .map_err(|error| ApiClientError::InvalidResponse(error.to_string()))
+    }
+
+    fn post_json<T>(&self, path: &str, request: &impl Serialize) -> Result<T, ApiClientError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
         let body = serde_json::to_string(request)
             .map_err(|error| ApiClientError::InvalidResponse(error.to_string()))?;
-        let url = format!("{}{API_PREFIX}/runs/{run_id}/input", self.base_url);
+        let url = format!("{}{API_PREFIX}{path}", self.base_url);
         let mut response = self
             .agent
             .post(&url)
@@ -227,7 +282,9 @@ mod tests {
         thread,
     };
 
-    use super::{OpsMindApiClient, ResumeDiagnosisRequest, StreamDiagnosisRequest};
+    use super::{
+        ApprovalRequest, OpsMindApiClient, ResumeDiagnosisRequest, StreamDiagnosisRequest,
+    };
 
     fn serve_once(body: &str) -> (String, Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
@@ -359,7 +416,7 @@ mod tests {
     #[test]
     fn posts_operator_input_to_resume_the_existing_run() {
         let (base_url, requests) = serve_once(
-            r#"{"run_id":"018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1","status":"completed","step_count":3,"final_answer":"safe summary","pending_question":null,"errors":[]}"#,
+            r#"{"run_id":"018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1","status":"completed","step_count":3,"final_answer":"safe summary","pending_question":null,"pending_approval":null,"errors":[]}"#,
         );
 
         let summary = OpsMindApiClient::new(base_url)
@@ -379,5 +436,44 @@ mod tests {
             )
         );
         assert!(request.contains("\"answer\":\"影响范围是支付服务。\""));
+    }
+
+    #[test]
+    fn records_approval_without_resuming_the_run() {
+        let (base_url, requests) = serve_once(
+            r#"{"run_id":"018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1","status":null,"step_count":1,"final_answer":null,"pending_question":null,"pending_approval":null,"errors":[]}"#,
+        );
+
+        OpsMindApiClient::new(base_url)
+            .resolve_approval(
+                "018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1",
+                &ApprovalRequest {
+                    decision: String::from("approve"),
+                    reason: String::from("维护窗口已确认。"),
+                },
+            )
+            .expect("approval response");
+
+        let request = requests.recv().expect("captured request");
+        assert!(request.starts_with(
+            "POST /api/v1/runs/018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1/approval HTTP/1.1"
+        ));
+        assert!(request.contains("\"decision\":\"approve\""));
+        assert!(!request.contains("/approval/resume"));
+    }
+
+    #[test]
+    fn resumes_only_after_an_explicit_approval_resume_request() {
+        let (base_url, requests) = serve_once(
+            r#"{"run_id":"018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1","status":"completed","step_count":2,"final_answer":"safe summary","pending_question":null,"pending_approval":null,"errors":[]}"#,
+        );
+
+        OpsMindApiClient::new(base_url)
+            .resume_approved("018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1")
+            .expect("approved resume response");
+
+        assert!(requests.recv().expect("captured request").starts_with(
+            "POST /api/v1/runs/018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1/approval/resume HTTP/1.1"
+        ));
     }
 }

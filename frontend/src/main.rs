@@ -21,7 +21,8 @@ use gpui_component::{
 
 use crate::{
     api_client::{
-        DiagnosisRunSummary, OpsMindApiClient, ResumeDiagnosisRequest, StreamDiagnosisRequest,
+        ApprovalRequest, DiagnosisRunSummary, OpsMindApiClient, ResumeDiagnosisRequest,
+        StreamDiagnosisRequest,
     },
     sse::ServerSentEvent,
 };
@@ -37,12 +38,15 @@ struct OpsMindConsole {
     catalog: CatalogState,
     diagnosis_input: Entity<InputState>,
     operator_input: Entity<InputState>,
+    approval_input: Entity<InputState>,
     submission: SubmissionState,
     operator_submission: SubmissionState,
+    approval_submission: SubmissionState,
     run: RunState,
     trajectory: Vec<String>,
     _input_subscription: Subscription,
     _operator_input_subscription: Subscription,
+    _approval_input_subscription: Subscription,
 }
 
 enum ConnectionState {
@@ -65,10 +69,29 @@ enum SubmissionState {
 
 enum RunState {
     Idle,
-    Running { event_count: usize },
-    WaitingForInput { run_id: String, question: String },
+    Running {
+        event_count: usize,
+    },
+    WaitingForInput {
+        run_id: String,
+        question: String,
+    },
     ResumingUserInput,
-    Finished { status: String, step_count: usize },
+    WaitingForApproval {
+        run_id: String,
+        tool_name: String,
+        reason: String,
+    },
+    RecordingApproval,
+    ApprovalRecorded {
+        run_id: String,
+        tool_name: String,
+    },
+    ResumingApproval,
+    Finished {
+        status: String,
+        step_count: usize,
+    },
     Failed,
 }
 
@@ -77,6 +100,7 @@ enum StreamUpdate {
     Closed { succeeded: bool },
     Resumed(DiagnosisRunSummary),
     ResumeFailed,
+    ApprovalRecorded { run_id: String, tool_name: String },
 }
 
 struct BootstrapSnapshot {
@@ -119,6 +143,20 @@ impl OpsMindConsole {
                 }
                 InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}
             });
+        let approval_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .rows(2)
+                .placeholder("填写审批理由，例如已确认维护窗口")
+        });
+        let approval_input_subscription =
+            cx.subscribe(&approval_input, |console, _, event, cx| match event {
+                InputEvent::Change => {
+                    console.approval_submission = SubmissionState::Draft;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}
+            });
         let mut console = Self {
             api_base_url: env::var("OPSMIND_API_BASE_URL")
                 .unwrap_or_else(|_| String::from(DEFAULT_API_BASE_URL)),
@@ -128,12 +166,15 @@ impl OpsMindConsole {
             catalog: CatalogState::Waiting,
             diagnosis_input,
             operator_input,
+            approval_input,
             submission: SubmissionState::Draft,
             operator_submission: SubmissionState::Draft,
+            approval_submission: SubmissionState::Draft,
             run: RunState::Idle,
             trajectory: Vec::new(),
             _input_subscription: input_subscription,
             _operator_input_subscription: operator_input_subscription,
+            _approval_input_subscription: approval_input_subscription,
         };
         console.refresh_backend_status(cx);
         console
@@ -229,6 +270,98 @@ impl OpsMindConsole {
             })
             .detach();
 
+        self.receive_single_update(receiver, cx);
+    }
+
+    fn approve_run(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.record_approval("approve", window, cx);
+    }
+
+    fn reject_run(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.record_approval("reject", window, cx);
+    }
+
+    fn record_approval(&mut self, decision: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let RunState::WaitingForApproval {
+            run_id, tool_name, ..
+        } = &self.run
+        else {
+            return;
+        };
+        let reason = match normalize_approval_reason(&self.approval_input.read(cx).value()) {
+            Ok(reason) => reason,
+            Err(()) => {
+                self.approval_submission = SubmissionState::Invalid;
+                cx.notify();
+                return;
+            }
+        };
+        let run_id = run_id.clone();
+        let tool_name = tool_name.clone();
+        self.approval_submission = SubmissionState::Prepared {
+            query: reason.clone(),
+        };
+        self.run = RunState::RecordingApproval;
+        self.approval_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        cx.notify();
+
+        let api_base_url = self.api_base_url.clone();
+        let decision = decision.to_owned();
+        let (sender, receiver) = async_channel::bounded(1);
+        cx.background_executor()
+            .spawn(async move {
+                let update = OpsMindApiClient::new(api_base_url)
+                    .resolve_approval(
+                        &run_id,
+                        &ApprovalRequest {
+                            decision: decision.clone(),
+                            reason,
+                        },
+                    )
+                    .map(|summary| {
+                        if decision == "approve" {
+                            StreamUpdate::ApprovalRecorded { run_id, tool_name }
+                        } else {
+                            StreamUpdate::Resumed(summary)
+                        }
+                    })
+                    .unwrap_or(StreamUpdate::ResumeFailed);
+                let _ = sender.send_blocking(update);
+            })
+            .detach();
+
+        self.receive_single_update(receiver, cx);
+    }
+
+    fn resume_approved_run(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let RunState::ApprovalRecorded { run_id, .. } = &self.run else {
+            return;
+        };
+        let run_id = run_id.clone();
+        self.run = RunState::ResumingApproval;
+        cx.notify();
+
+        let api_base_url = self.api_base_url.clone();
+        let (sender, receiver) = async_channel::bounded(1);
+        cx.background_executor()
+            .spawn(async move {
+                let update = OpsMindApiClient::new(api_base_url)
+                    .resume_approved(&run_id)
+                    .map(StreamUpdate::Resumed)
+                    .unwrap_or(StreamUpdate::ResumeFailed);
+                let _ = sender.send_blocking(update);
+            })
+            .detach();
+
+        self.receive_single_update(receiver, cx);
+    }
+
+    fn receive_single_update(
+        &mut self,
+        receiver: async_channel::Receiver<StreamUpdate>,
+        cx: &mut Context<Self>,
+    ) {
         let this = cx.weak_entity();
         let mut async_cx = cx.to_async();
         cx.foreground_executor()
@@ -245,7 +378,12 @@ impl OpsMindConsole {
 
     /// 启动后台 SSE 请求，并将安全事件转交给 GPUI 主线程。
     fn start_diagnosis(&mut self, raw_query: String, cx: &mut Context<Self>) {
-        if !self.backend_is_ready() || self.is_busy() || self.waiting_for_user_input().is_some() {
+        if !self.backend_is_ready()
+            || self.is_busy()
+            || self.waiting_for_user_input().is_some()
+            || self.waiting_for_approval().is_some()
+            || self.approval_is_recorded().is_some()
+        {
             return;
         }
         let query = match normalize_diagnosis_query(&raw_query) {
@@ -307,6 +445,9 @@ impl OpsMindConsole {
             StreamUpdate::Closed { .. } => {}
             StreamUpdate::Resumed(summary) => self.apply_run_summary(summary),
             StreamUpdate::ResumeFailed => self.run = RunState::Failed,
+            StreamUpdate::ApprovalRecorded { run_id, tool_name } => {
+                self.run = RunState::ApprovalRecorded { run_id, tool_name };
+            }
         }
     }
 
@@ -352,6 +493,16 @@ impl OpsMindConsole {
         }
     }
 
+    fn approval_submission_detail(&self) -> String {
+        match &self.approval_submission {
+            SubmissionState::Draft => String::from("审批理由只记录为审计决议。"),
+            SubmissionState::Invalid => String::from("审批理由不能为空，且不得超过 2000 个字符。"),
+            SubmissionState::Prepared { query } => {
+                format!("正在记录 {} 个字符的审批理由。", query.chars().count())
+            }
+        }
+    }
+
     fn backend_is_ready(&self) -> bool {
         matches!(&self.connection, ConnectionState::Ready { .. })
     }
@@ -363,13 +514,34 @@ impl OpsMindConsole {
     fn is_busy(&self) -> bool {
         matches!(
             &self.run,
-            RunState::Running { .. } | RunState::ResumingUserInput
+            RunState::Running { .. }
+                | RunState::ResumingUserInput
+                | RunState::RecordingApproval
+                | RunState::ResumingApproval
         )
     }
 
     fn waiting_for_user_input(&self) -> Option<(&str, &str)> {
         match &self.run {
             RunState::WaitingForInput { run_id, question } => Some((run_id, question)),
+            _ => None,
+        }
+    }
+
+    fn waiting_for_approval(&self) -> Option<(&str, &str, &str)> {
+        match &self.run {
+            RunState::WaitingForApproval {
+                run_id,
+                tool_name,
+                reason,
+            } => Some((run_id, tool_name, reason)),
+            _ => None,
+        }
+    }
+
+    fn approval_is_recorded(&self) -> Option<(&str, &str)> {
+        match &self.run {
+            RunState::ApprovalRecorded { run_id, tool_name } => Some((run_id, tool_name)),
             _ => None,
         }
     }
@@ -397,6 +569,33 @@ impl OpsMindConsole {
                 question,
             };
             self.operator_submission = SubmissionState::Draft;
+            return;
+        }
+        if status == "waiting_approval" {
+            let Some((tool_name, reason)) =
+                data["pending_approval"].as_object().and_then(|approval| {
+                    safe_pending_approval(
+                        approval.get("tool_name")?.as_str()?,
+                        approval.get("reason")?.as_str()?,
+                    )
+                })
+            else {
+                self.run = RunState::Failed;
+                return;
+            };
+            let Some(run_id) = data["run_id"]
+                .as_str()
+                .filter(|value| is_safe_run_id(value))
+            else {
+                self.run = RunState::Failed;
+                return;
+            };
+            self.run = RunState::WaitingForApproval {
+                run_id: run_id.to_owned(),
+                tool_name,
+                reason,
+            };
+            self.approval_submission = SubmissionState::Draft;
             return;
         }
         self.run = RunState::Finished { status, step_count };
@@ -427,6 +626,29 @@ impl OpsMindConsole {
             self.operator_submission = SubmissionState::Draft;
             return;
         }
+        if status == "waiting_approval" {
+            let Some(approval) = summary.pending_approval else {
+                self.run = RunState::Failed;
+                return;
+            };
+            let Some((tool_name, reason)) =
+                safe_pending_approval(&approval.tool_name, &approval.reason)
+            else {
+                self.run = RunState::Failed;
+                return;
+            };
+            if !is_safe_run_id(&summary.run_id) {
+                self.run = RunState::Failed;
+                return;
+            }
+            self.run = RunState::WaitingForApproval {
+                run_id: summary.run_id,
+                tool_name,
+                reason,
+            };
+            self.approval_submission = SubmissionState::Draft;
+            return;
+        }
         self.run = RunState::Finished {
             status,
             step_count: summary.step_count,
@@ -441,6 +663,10 @@ impl OpsMindConsole {
             }
             RunState::WaitingForInput { .. } => String::from("等待操作人员补充信息。"),
             RunState::ResumingUserInput => String::from("正在提交补充信息并恢复运行。"),
+            RunState::WaitingForApproval { .. } => String::from("等待高风险动作审批。"),
+            RunState::RecordingApproval => String::from("正在记录审批决议。"),
+            RunState::ApprovalRecorded { .. } => String::from("审批已记录，等待显式续跑。"),
+            RunState::ResumingApproval => String::from("正在恢复已批准的动作。"),
             RunState::Finished { status, step_count } => {
                 format!("运行结束 · {status} · {step_count} 个步骤")
             }
@@ -455,6 +681,14 @@ fn normalize_diagnosis_query(raw_query: &str) -> Result<String, ()> {
         return Err(());
     }
     Ok(query.to_owned())
+}
+
+fn normalize_approval_reason(raw_reason: &str) -> Result<String, ()> {
+    let reason = raw_reason.trim();
+    if reason.is_empty() || reason.chars().count() > 2_000 {
+        return Err(());
+    }
+    Ok(reason.to_owned())
 }
 
 fn desktop_identifier(kind: &str) -> String {
@@ -483,6 +717,19 @@ fn safe_pending_question(value: &str) -> Option<String> {
         return None;
     }
     Some(question.to_owned())
+}
+
+fn safe_pending_approval(tool_name: &str, reason: &str) -> Option<(String, String)> {
+    let tool_name = tool_name.trim();
+    let reason = reason.trim();
+    if tool_name.is_empty()
+        || tool_name.chars().count() > 100
+        || reason.is_empty()
+        || reason.chars().count() > 2_000
+    {
+        return None;
+    }
+    Some((tool_name.to_owned(), reason.to_owned()))
 }
 
 fn is_safe_run_id(value: &str) -> bool {
@@ -617,7 +864,9 @@ impl Render for OpsMindConsole {
                                             .disabled(
                                                 !self.backend_is_ready()
                                                     || self.is_busy()
-                                                    || self.waiting_for_user_input().is_some(),
+                                                    || self.waiting_for_user_input().is_some()
+                                                    || self.waiting_for_approval().is_some()
+                                                    || self.approval_is_recorded().is_some(),
                                             )
                                             .on_click(cx.listener(Self::submit_diagnosis)),
                                     ),
@@ -661,6 +910,105 @@ impl Render for OpsMindConsole {
                                                     )
                                                     .on_click(cx.listener(Self::submit_user_input)),
                                             ),
+                                    ),
+                            )
+                        },
+                    )
+                    .when_some(
+                        self.waiting_for_approval().map(|(_, tool_name, reason)| {
+                            (tool_name.to_owned(), reason.to_owned())
+                        }),
+                        |this, (tool_name, reason)| {
+                            this.child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .p(px(18.0))
+                                    .gap(px(12.0))
+                                    .bg(rgb(0x241b16))
+                                    .child(
+                                        div()
+                                            .text_color(rgb(0xffb000))
+                                            .child("HIGH-RISK ACTION REVIEW"),
+                                    )
+                                    .child(div().child(format!("工具：{tool_name}")))
+                                    .child(div().text_color(rgb(0xaab6bc)).child(reason))
+                                    .child(Input::new(&self.approval_input).h(px(70.0)))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                div()
+                                                    .text_color(rgb(0xaab6bc))
+                                                    .child(self.approval_submission_detail()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .gap(px(8.0))
+                                                    .child(
+                                                        Button::new("reject-approval")
+                                                            .label("拒绝动作")
+                                                            .disabled(
+                                                                !self.backend_is_ready()
+                                                                    || self.is_busy(),
+                                                            )
+                                                            .on_click(
+                                                                cx.listener(Self::reject_run),
+                                                            ),
+                                                    )
+                                                    .child(
+                                                        Button::new("approve-approval")
+                                                            .label("记录批准")
+                                                            .primary()
+                                                            .loading(self.is_busy())
+                                                            .disabled(
+                                                                !self.backend_is_ready()
+                                                                    || self.is_busy(),
+                                                            )
+                                                            .on_click(
+                                                                cx.listener(Self::approve_run),
+                                                            ),
+                                                    ),
+                                            ),
+                                    ),
+                            )
+                        },
+                    )
+                    .when_some(
+                        self.approval_is_recorded()
+                            .map(|(_, tool_name)| tool_name.to_owned()),
+                        |this, tool_name| {
+                            this.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .p(px(18.0))
+                                    .bg(rgb(0x163022))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(4.0))
+                                            .child(
+                                                div()
+                                                    .text_color(rgb(0x8ee6a8))
+                                                    .child("APPROVAL RECORDED"),
+                                            )
+                                            .child(div().child(format!(
+                                                "已批准 {tool_name}；需要再次确认才会继续运行。"
+                                            ))),
+                                    )
+                                    .child(
+                                        Button::new("resume-approved-run")
+                                            .label("确认并继续")
+                                            .primary()
+                                            .loading(self.is_busy())
+                                            .disabled(!self.backend_is_ready() || self.is_busy())
+                                            .on_click(cx.listener(Self::resume_approved_run)),
                                     ),
                             )
                         },
@@ -722,7 +1070,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        is_safe_run_id, normalize_diagnosis_query, safe_pending_question, trajectory_entry,
+        is_safe_run_id, normalize_approval_reason, normalize_diagnosis_query,
+        safe_pending_approval, safe_pending_question, trajectory_entry,
     };
 
     #[test]
@@ -776,5 +1125,20 @@ mod tests {
         assert!(safe_pending_question(&"x".repeat(2_001)).is_none());
         assert!(is_safe_run_id("018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1"));
         assert!(!is_safe_run_id("../../unexpected-path"));
+    }
+
+    #[test]
+    fn accepts_only_safe_approval_summaries_and_reasons() {
+        assert_eq!(
+            safe_pending_approval(" restart_service ", "  该工具的风险策略要求人工审批。  "),
+            Some((
+                String::from("restart_service"),
+                String::from("该工具的风险策略要求人工审批。")
+            ))
+        );
+        assert!(safe_pending_approval("", "审批原因").is_none());
+        assert!(safe_pending_approval("restart_service", &"x".repeat(2_001)).is_none());
+        assert!(normalize_approval_reason("  维护窗口已确认。 ").is_ok());
+        assert!(normalize_approval_reason(" ").is_err());
     }
 }

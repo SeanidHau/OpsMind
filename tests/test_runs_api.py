@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 
 from app.api.main import create_app
+from app.api.routers.runs import response_from_state
 from app.harness.loop import create_initial_state
 from app.models.contracts import (
     ActionType,
@@ -224,6 +225,7 @@ def test_runs_endpoint_delegates_to_injected_diagnosis_runner() -> None:
         "step_count": 2,
         "final_answer": "诊断已完成。",
         "pending_question": None,
+        "pending_approval": None,
         "errors": [],
     }
     assert runner.calls == [create_payload()]
@@ -285,6 +287,7 @@ def test_run_query_endpoint_returns_cached_result_without_starting_a_run() -> No
         "step_count": 3,
         "final_answer": "诊断已完成。",
         "pending_question": None,
+        "pending_approval": None,
         "errors": [],
     }
     assert runner.read_run_ids == [run_id]
@@ -553,6 +556,32 @@ def test_run_input_endpoint_resumes_the_same_run() -> None:
     assert response.json()["status"] == "completed"
     assert response.json()["final_answer"] == "已根据补充信息完成诊断。"
     assert runner.resume_calls == [(run_id, "数据库连接数已达到上限")]
+
+
+def test_run_summary_projects_only_the_safe_pending_approval_fields() -> None:
+    """审批摘要不应包含待执行动作的参数或其他 checkpoint 内容。"""
+    summary = response_from_state(
+        {
+            "run_id": str(uuid4()),
+            "terminal_status": HarnessStatus.WAITING_APPROVAL,
+            "step_count": 1,
+            "final_answer": None,
+            "pending_question": None,
+            "approval_request": {
+                "tool_name": "restart_service",
+                "reason": "该工具的风险策略要求人工审批。",
+                "tool_args": {"api_key": "secret"},
+            },
+            "errors": [],
+        }
+    )
+
+    assert summary.pending_approval is not None
+    assert summary.pending_approval.model_dump() == {
+        "tool_name": "restart_service",
+        "reason": "该工具的风险策略要求人工审批。",
+    }
+    assert "secret" not in summary.model_dump_json()
 
 
 def test_run_input_endpoint_rejects_blank_answer() -> None:

@@ -18,6 +18,15 @@ class CreateDiagnosisRunRequest(BaseModel):
     user_query: str = Field(min_length=1, max_length=4_000)
 
 
+class PendingApprovalResponse(BaseModel):
+    """等待审批时可公开展示的最小摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_name: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=1, max_length=2_000)
+
+
 class DiagnosisRunResponse(BaseModel):
     """诊断运行结束或暂停后返回的最小安全摘要。"""
 
@@ -28,6 +37,7 @@ class DiagnosisRunResponse(BaseModel):
     step_count: int = Field(ge=0)
     final_answer: str | None
     pending_question: str | None
+    pending_approval: PendingApprovalResponse | None
     errors: list[str]
 
 

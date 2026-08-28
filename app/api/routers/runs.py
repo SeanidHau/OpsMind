@@ -23,6 +23,7 @@ from app.api.schemas.runs import (
     DiagnosisRunResponse,
     DiagnosisRunTrajectoryResponse,
     DiagnosisTrajectoryEventResponse,
+    PendingApprovalResponse,
     ResumeDiagnosisRunRequest,
 )
 from app.api.streaming import QueueEventObserver
@@ -47,8 +48,28 @@ def response_from_state(result: Mapping[str, Any]) -> DiagnosisRunResponse:
         step_count=int(result["step_count"]),
         final_answer=result.get("final_answer"),
         pending_question=result.get("pending_question"),
+        pending_approval=pending_approval_from_state(result),
         errors=list(result["errors"]),
     )
+
+
+def pending_approval_from_state(
+    result: Mapping[str, Any],
+) -> PendingApprovalResponse | None:
+    """只投影审批所需的工具名称和策略原因。"""
+    approval_request = result.get("approval_request")
+    if not isinstance(approval_request, Mapping):
+        return None
+
+    tool_name = approval_request.get("tool_name")
+    reason = approval_request.get("reason")
+    if not isinstance(tool_name, str) or not isinstance(reason, str):
+        return None
+    if not tool_name.strip() or len(tool_name) > 100:
+        return None
+    if not reason.strip() or len(reason) > 2_000:
+        return None
+    return PendingApprovalResponse(tool_name=tool_name, reason=reason)
 
 
 def trajectory_event_response(event: AgentEvent) -> DiagnosisTrajectoryEventResponse:
@@ -317,6 +338,7 @@ async def get_diagnosis_run(
         step_count=int(final_state["step_count"]),
         final_answer=final_state.get("final_answer"),
         pending_question=final_state.get("pending_question"),
+        pending_approval=pending_approval_from_state(final_state),
         errors=list(final_state["errors"]),
     )
 
