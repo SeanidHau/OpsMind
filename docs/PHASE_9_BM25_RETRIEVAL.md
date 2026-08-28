@@ -4,7 +4,7 @@
 
 本阶段在第 8 阶段的 `KnowledgeChunk` 上实现内存 BM25 检索。检索结果使用稳定的 `RetrievalHit` 契约，包含来源分块、分数和排名。
 
-本阶段不连接 Qdrant、不生成 embedding，也不执行 RRF 融合。
+本阶段不连接 Milvus、不生成 embedding，也不执行 RRF 融合。
 
 ## 检索规则
 

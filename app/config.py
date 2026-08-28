@@ -36,7 +36,7 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://opsmind:opsmind_dev_only@127.0.0.1:5432/opsmind"
     )
     run_archive_backend: Literal["memory", "postgres"] = "memory"
-    qdrant_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:6333")
+    milvus_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:19530")
 
     # 模型供应商配置保持可选，避免健康检查依赖真实密钥。
     llm_provider: str | None = None

@@ -14,7 +14,8 @@ def make_settings(**overrides: object) -> Settings:
         "app_env": AppEnvironment.TEST,
         "log_level": "INFO",
         "database_url": "postgresql+asyncpg://opsmind:password@localhost:5432/opsmind",
-        "qdrant_url": "http://localhost:6333",
+        "run_archive_backend": "memory",
+        "milvus_url": "http://localhost:19530",
     }
     return Settings(_env_file=None, **(defaults | overrides))
 

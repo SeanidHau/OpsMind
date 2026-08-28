@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/v1", tags=["system"])
     summary="检查服务进程是否存活",
 )
 async def get_health() -> HealthResponse:
-    """返回应用进程状态，不检查 PostgreSQL 或 Qdrant 连通性。"""
+    """返回应用进程状态，不检查 PostgreSQL 或 Milvus 连通性。"""
     return HealthResponse(
         status="ok",
         service="opsmind",

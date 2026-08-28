@@ -2,9 +2,9 @@
 
 ## 目标
 
-本阶段实现 RAG Ingestion Pipeline 的前两步：读取 Markdown 文档，并切分为带稳定标识的知识分块。输出同时保留 Pydantic 契约和 LangChain `Document`，供后续 BM25、embedding 和 Qdrant 复用。
+本阶段实现 RAG Ingestion Pipeline 的前两步：读取 Markdown 文档，并切分为带稳定标识的知识分块。输出同时保留 Pydantic 契约和 LangChain `Document`，供后续 BM25、embedding 和 Milvus 复用。
 
-本阶段不生成 embedding、不写入 Qdrant，也不执行检索。
+本阶段不生成 embedding、不写入 Milvus，也不执行检索。
 
 ## 输入格式
 

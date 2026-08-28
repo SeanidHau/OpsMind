@@ -2,7 +2,7 @@
 
 > 面向秋招展示的 Agent 工程项目设计文档
 >
-> 技术栈：Python、LangChain、LangGraph、RAG、FastAPI、GPUI、Qdrant、PostgreSQL、Docker Compose、LangSmith
+> 技术栈：Python、LangChain、LangGraph、RAG、FastAPI、GPUI、Milvus、PostgreSQL、Docker Compose、LangSmith
 
 ## 1. 项目定位
 
@@ -113,7 +113,7 @@ OpsMind 是一个面向长流程任务的 Agent Harness，使用运维故障诊�
 
 架构数据流：
 
-GPUI 桌面工作台 → FastAPI 服务层 → LangGraph Diagnosis Graph → RAG 检索层和模拟工具层 → Qdrant、PostgreSQL。
+GPUI 桌面工作台 → FastAPI 服务层 → LangGraph Diagnosis Graph → RAG 检索层和模拟工具层 → Milvus、PostgreSQL。
 
 ### 组件职责
 
@@ -123,7 +123,7 @@ GPUI 桌面工作台 → FastAPI 服务层 → LangGraph Diagnosis Graph → RAG
 | LangChain | 模型、Prompt、Retriever、Tool 和结构化输出 |
 | LangGraph | Agent 状态机、路由、循环、重试、持久化和审批 |
 | Agent Harness | Loop、计划、上下文、Policy、预算、验证和 replay |
-| Qdrant | 文档切片向量和元数据过滤 |
+| Milvus | 文档切片向量和元数据过滤 |
 | PostgreSQL | 会话、运行记录、审批、工单、评测和 checkpoint |
 | FastAPI | 后端 API 与 SSE 流式事件 |
 | GPUI | 对话、执行时间线、证据和审批交互 |
@@ -370,13 +370,13 @@ classify → retrieve → collect_evidence → analyze → check_completeness �
 
 ### Ingestion Pipeline
 
-扫描文档 → 计算文件 hash → 解析与分块 → 生成 metadata → 生成 embedding → 写入 Qdrant → 删除旧版本切片 → 输出索引统计。
+扫描文档 → 计算文件 hash → 解析与分块 → 生成 metadata → 生成 embedding → 写入 Milvus → 删除旧版本切片 → 输出索引统计。
 
 要求重复执行幂等，不产生重复向量，并支持按文档版本回滚。
 
 ### 检索流程
 
-问题改写 → 查询分类 → Qdrant 向量召回 → BM25 关键词召回 → 合并去重 → Reciprocal Rank Fusion → metadata filter → Top-K 证据 → 返回来源和片段。
+问题改写 → 查询分类 → Milvus 向量召回 → BM25 关键词召回 → 合并去重 → Reciprocal Rank Fusion → metadata filter → Top-K 证据 → 返回来源和片段。
 
 第一版实现向量检索、BM25、RRF、metadata filter 和文档来源引用。Reranker 作为增强项，不阻塞 MVP。
 
@@ -488,7 +488,7 @@ classify → retrieve → collect_evidence → analyze → check_completeness �
 
 存储用户和开发模式身份、会话、消息、运行记录、审批请求、审批结果、审计日志、模拟工单、评测样本、评测结果和 LangGraph checkpoint。
 
-### Qdrant
+### Milvus
 
 存储文档切片向量、文档来源、文档版本以及服务、组件、环境、故障等级等 metadata。
 
@@ -644,7 +644,7 @@ Docker Compose 服务：
 - frontend；
 - backend；
 - postgres；
-- qdrant。
+- milvus。
 
 模型通过环境变量接入外部 API；配置 Ollama 时可切换为本地模型。
 
@@ -664,7 +664,7 @@ Harness 版本建议按 4～6 周安排。如果必须在 2～4 周内完成，�
 
 ### 第 2 周：RAG 与单次诊断
 
-编写知识库文档；实现 ingestion pipeline；接入 Qdrant 和 BM25；实现 RRF 融合和来源引用；实现 Harness Loop、Context Manager、Policy 和 Progress Verifier；实现 classify、retrieve、collect、analyze、report 节点；打通单次诊断闭环。
+编写知识库文档；实现 ingestion pipeline；接入 Milvus 和 BM25；实现 RRF 融合和来源引用；实现 Harness Loop、Context Manager、Policy 和 Progress Verifier；实现 classify、retrieve、collect、analyze、report 节点；打通单次诊断闭环。
 
 ### 第 3 周：可靠性与接口
 
@@ -676,7 +676,7 @@ Harness 版本建议按 4～6 周安排。如果必须在 2～4 周内完成，�
 
 ## 21. 秋招简历描述
 
-> 基于 Python、LangChain、LangGraph 和 RAG 构建企业级智能运维 Agent，支持故障分类、混合检索、日志/指标/拓扑查询、证据融合、结构化诊断、风险分级和人工审批。通过 LangGraph 实现有状态工作流、条件路由、工具重试、降级和 checkpoint 恢复；使用 Qdrant + BM25 实现带来源引用的混合检索，并基于 LangSmith 构建 50+ 条评测集，验证分类、根因判断、证据引用和高风险操作拦截能力。
+> 基于 Python、LangChain、LangGraph 和 RAG 构建企业级智能运维 Agent，支持故障分类、混合检索、日志/指标/拓扑查询、证据融合、结构化诊断、风险分级和人工审批。通过 LangGraph 实现有状态工作流、条件路由、工具重试、降级和 checkpoint 恢复；使用 Milvus + BM25 实现带来源引用的混合检索，并基于 LangSmith 构建 50+ 条评测集，验证分类、根因判断、证据引用和高风险操作拦截能力。
 
 实际指标必须在完成评测后填写，不应预先虚构结果。
 

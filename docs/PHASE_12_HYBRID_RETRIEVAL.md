@@ -4,7 +4,7 @@
 
 本阶段将 BM25、向量检索和 RRF 融合封装为单一 `HybridRetriever`。调用方一次传入文本查询、查询向量、元数据过滤条件和 `top_k`，即可获得包含融合分数与检索器来源的证据列表。
 
-本阶段不生成 embedding、不连接 Qdrant，也不在 Harness Loop 中调用检索器。
+本阶段不生成 embedding、不连接 Milvus，也不在 Harness Loop 中调用检索器。
 
 ## 执行顺序
 

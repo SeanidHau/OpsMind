@@ -4,7 +4,7 @@
 
 本阶段实现基于预计算向量和余弦相似度的内存检索器。它与 BM25 使用相同的 `RetrievalHit` 输出，因而可以直接作为 RRF 融合的输入。
 
-本阶段不生成 embedding、不连接 Qdrant，也不修改 Harness Loop。固定向量仅用于验证向量检索的排序、过滤和错误边界。
+本阶段不生成 embedding、不连接 Milvus，也不修改 Harness Loop。固定向量仅用于验证向量检索的排序、过滤和错误边界。
 
 ## 检索规则
 

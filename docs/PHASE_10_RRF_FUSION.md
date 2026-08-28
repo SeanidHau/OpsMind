@@ -4,7 +4,7 @@
 
 本阶段将多个检索器的排序结果融合为统一的证据候选列表。当前接入 BM25 结果，并为后续向量检索预留相同输入接口。
 
-本阶段不接入 Qdrant、不生成 embedding，也不在 Harness Loop 中调用检索器。
+本阶段不接入 Milvus、不生成 embedding，也不在 Harness Loop 中调用检索器。
 
 ## 融合规则
 

@@ -1,14 +1,16 @@
-"""QdrantVectorStore 的验收测试。"""
+"""MilvusVectorStore 的验收测试。"""
+
+from pathlib import Path
 
 import pytest
-from app.rag.qdrant_store import QdrantVectorStore
-from qdrant_client import QdrantClient
+from pymilvus import MilvusClient
 
 from app.models.contracts import KnowledgeChunk, VectorizedChunk
+from app.rag.milvus_store import MilvusVectorStore
 
 
 def make_records() -> list[VectorizedChunk]:
-    """构造用于真实 Qdrant 内存模式的向量分块。"""
+    """构造用于 Milvus Lite 的向量分块。"""
     return [
         VectorizedChunk(
             chunk=KnowledgeChunk(
@@ -43,18 +45,18 @@ def make_records() -> list[VectorizedChunk]:
     ]
 
 
-def make_store() -> QdrantVectorStore:
-    """构造独立的 Qdrant 内存集合。"""
-    return QdrantVectorStore(
-        client=QdrantClient(":memory:"),
+def make_store(tmp_path: Path) -> MilvusVectorStore:
+    """构造使用独立 Milvus Lite 数据目录的存储。"""
+    return MilvusVectorStore(
+        client=MilvusClient(str(tmp_path / "milvus.db")),
         collection_name="knowledge_chunks",
         vector_size=2,
     )
 
 
-def test_upsert_creates_collection_and_returns_ranked_hits() -> None:
+def test_upsert_creates_collection_and_returns_ranked_hits(tmp_path: Path) -> None:
     """首次写入应建集合，并按余弦相似度返回来源完整的分块。"""
-    store = make_store()
+    store = make_store(tmp_path)
     store.upsert(make_records())
 
     hits = store.search([1.0, 0.0], top_k=2)
@@ -64,9 +66,9 @@ def test_upsert_creates_collection_and_returns_ranked_hits() -> None:
     assert hits[0].chunk.metadata["document_type"] == "runbook"
 
 
-def test_upsert_is_idempotent_and_metadata_filter_reaches_qdrant() -> None:
-    """稳定点 ID 应避免重复写入，且过滤条件应由 Qdrant 执行。"""
-    store = make_store()
+def test_upsert_is_idempotent_and_metadata_filter_reaches_milvus(tmp_path: Path) -> None:
+    """稳定主键应避免重复写入，且 JSON 过滤条件由 Milvus 执行。"""
+    store = make_store(tmp_path)
     payment_record = make_records()[0]
     store.upsert([payment_record])
     store.upsert([payment_record])
@@ -79,9 +81,9 @@ def test_upsert_is_idempotent_and_metadata_filter_reaches_qdrant() -> None:
     assert [hit.chunk.chunk_id for hit in hits] == ["payment-db"]
 
 
-def test_metadata_filter_excludes_other_services() -> None:
-    """嵌套 metadata 字段必须限制 Qdrant 的候选点。"""
-    store = make_store()
+def test_metadata_filter_excludes_other_services(tmp_path: Path) -> None:
+    """JSON 元数据过滤必须限制 Milvus 的候选实体。"""
+    store = make_store(tmp_path)
     store.upsert(make_records())
 
     hits = store.search(
@@ -92,22 +94,15 @@ def test_metadata_filter_excludes_other_services() -> None:
     assert hits == []
 
 
-def test_store_rejects_invalid_configuration_and_vector_dimensions() -> None:
+def test_store_rejects_invalid_configuration_and_vector_dimensions(tmp_path: Path) -> None:
     """集合名、维度、查询向量和写入向量必须显式校验。"""
+    client = MilvusClient(str(tmp_path / "invalid.db"))
     with pytest.raises(ValueError, match="collection_name"):
-        QdrantVectorStore(
-            client=QdrantClient(":memory:"),
-            collection_name=" ",
-            vector_size=2,
-        )
+        MilvusVectorStore(client=client, collection_name=" ", vector_size=2)
     with pytest.raises(ValueError, match="vector_size"):
-        QdrantVectorStore(
-            client=QdrantClient(":memory:"),
-            collection_name="knowledge_chunks",
-            vector_size=0,
-        )
+        MilvusVectorStore(client=client, collection_name="knowledge_chunks", vector_size=0)
 
-    store = make_store()
+    store = make_store(tmp_path)
     with pytest.raises(ValueError, match="dimension"):
         store.upsert(
             [

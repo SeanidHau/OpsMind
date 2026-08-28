@@ -16,7 +16,7 @@ dependencies = [
     "langsmith>=0.3,<1.0",
     "pydantic>=2.10,<3.0",
     "pydantic-settings>=2.7,<3.0",
-    "qdrant-client>=1.14,<2.0",
+    "pymilvus>=2.6,<3.0",
     "sqlalchemy[asyncio]>=2.0,<3.0",
     "structlog>=25.0,<26.0",
     "tenacity>=9.0,<10.0",
@@ -27,6 +27,7 @@ dependencies = [
 dev = [
     # 测试、静态检查与格式化工具。
     "mypy>=1.15,<2.0",
+    "pymilvus[milvus-lite]>=2.6,<3.0",
     "pytest>=8.3,<10.0",
     "pytest-asyncio>=0.25,<1.0",
     "pytest-cov>=6.0,<8.0",

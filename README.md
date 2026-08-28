@@ -12,7 +12,7 @@ OpsMind 是一个面向长流程任务的 Agent Harness 项目，使用运维故
 
 - Python 3.12
 - LangChain、LangGraph、LangSmith
-- FastAPI、Qdrant、PostgreSQL（本地开发依赖）
+- FastAPI、Milvus、PostgreSQL（本地开发依赖）
 - pytest、Ruff、mypy、Docker Compose
 
 ## 本地开发
@@ -20,7 +20,7 @@ OpsMind 是一个面向长流程任务的 Agent Harness 项目，使用运维故
 ### 前置条件
 
 - 安装 `uv`。项目使用 `uv` 管理 Python 版本、虚拟环境和依赖锁定文件。
-- 如需启动 PostgreSQL 和 Qdrant，安装 Docker Desktop 并确保 Docker 服务正在运行。
+- 如需启动 PostgreSQL 和 Milvus，安装 Docker Desktop 并确保 Docker 服务正在运行。
 
 ### 初始化
 
@@ -36,7 +36,7 @@ OpsMind 是一个面向长流程任务的 Agent Harness 项目，使用运维故
    uv sync --all-groups
    ```
 
-3. 可选：启动 PostgreSQL 和 Qdrant。
+3. 可选：启动 PostgreSQL 和 Milvus。
 
    默认的模拟场景诊断不依赖这两个服务。设置 `RUN_ARCHIVE_BACKEND=postgres` 前，先启动 PostgreSQL。需要验证本地基础设施配置时，运行：
 
