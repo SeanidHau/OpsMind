@@ -33,6 +33,24 @@ pub struct StreamDiagnosisRequest {
     pub user_query: String,
 }
 
+/// 恢复等待用户输入的运行所需的公开请求字段。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResumeDiagnosisRequest {
+    pub answer: String,
+}
+
+/// 运行接口返回的最小安全摘要。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosisRunSummary {
+    pub run_id: String,
+    pub status: Option<String>,
+    pub step_count: usize,
+    pub final_answer: Option<String>,
+    pub pending_question: Option<String>,
+    pub errors: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApiClientError {
     Request(String),
@@ -151,6 +169,33 @@ impl OpsMindApiClient {
         Ok(())
     }
 
+    /// 提交一条用户补充信息，并恢复同一条已暂停的诊断运行。
+    pub fn resume_with_user_input(
+        &self,
+        run_id: &str,
+        request: &ResumeDiagnosisRequest,
+    ) -> Result<DiagnosisRunSummary, ApiClientError> {
+        let body = serde_json::to_string(request)
+            .map_err(|error| ApiClientError::InvalidResponse(error.to_string()))?;
+        let url = format!("{}{API_PREFIX}/runs/{run_id}/input", self.base_url);
+        let mut response = self
+            .agent
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .send(&body)
+            .map_err(|error| ApiClientError::Request(error.to_string()))?;
+        let response_body = response
+            .body_mut()
+            .with_config()
+            .limit(MAX_RESPONSE_BYTES)
+            .read_to_string()
+            .map_err(|error| ApiClientError::Request(error.to_string()))?;
+
+        serde_json::from_str(&response_body)
+            .map_err(|error| ApiClientError::InvalidResponse(error.to_string()))
+    }
+
     fn get_json<T>(&self, path: &str) -> Result<T, ApiClientError>
     where
         T: for<'de> Deserialize<'de>,
@@ -182,7 +227,7 @@ mod tests {
         thread,
     };
 
-    use super::{OpsMindApiClient, StreamDiagnosisRequest};
+    use super::{OpsMindApiClient, ResumeDiagnosisRequest, StreamDiagnosisRequest};
 
     fn serve_once(body: &str) -> (String, Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
@@ -309,5 +354,30 @@ mod tests {
             request.contains("\"user_query\":\"checkout latency increased\""),
             "unexpected request: {request}"
         );
+    }
+
+    #[test]
+    fn posts_operator_input_to_resume_the_existing_run() {
+        let (base_url, requests) = serve_once(
+            r#"{"run_id":"018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1","status":"completed","step_count":3,"final_answer":"safe summary","pending_question":null,"errors":[]}"#,
+        );
+
+        let summary = OpsMindApiClient::new(base_url)
+            .resume_with_user_input(
+                "018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1",
+                &ResumeDiagnosisRequest {
+                    answer: String::from("影响范围是支付服务。"),
+                },
+            )
+            .expect("resume response");
+
+        assert_eq!(summary.status.as_deref(), Some("completed"));
+        let request = requests.recv().expect("captured request");
+        assert!(
+            request.starts_with(
+                "POST /api/v1/runs/018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1/input HTTP/1.1"
+            )
+        );
+        assert!(request.contains("\"answer\":\"影响范围是支付服务。\""));
     }
 }

@@ -20,7 +20,9 @@ use gpui_component::{
 };
 
 use crate::{
-    api_client::{OpsMindApiClient, StreamDiagnosisRequest},
+    api_client::{
+        DiagnosisRunSummary, OpsMindApiClient, ResumeDiagnosisRequest, StreamDiagnosisRequest,
+    },
     sse::ServerSentEvent,
 };
 
@@ -34,10 +36,13 @@ struct OpsMindConsole {
     connection: ConnectionState,
     catalog: CatalogState,
     diagnosis_input: Entity<InputState>,
+    operator_input: Entity<InputState>,
     submission: SubmissionState,
+    operator_submission: SubmissionState,
     run: RunState,
     trajectory: Vec<String>,
     _input_subscription: Subscription,
+    _operator_input_subscription: Subscription,
 }
 
 enum ConnectionState {
@@ -61,6 +66,8 @@ enum SubmissionState {
 enum RunState {
     Idle,
     Running { event_count: usize },
+    WaitingForInput { run_id: String, question: String },
+    ResumingUserInput,
     Finished { status: String, step_count: usize },
     Failed,
 }
@@ -68,6 +75,8 @@ enum RunState {
 enum StreamUpdate {
     Event(ServerSentEvent),
     Closed { succeeded: bool },
+    Resumed(DiagnosisRunSummary),
+    ResumeFailed,
 }
 
 struct BootstrapSnapshot {
@@ -96,6 +105,20 @@ impl OpsMindConsole {
                 | InputEvent::Focus
                 | InputEvent::Blur => {}
             });
+        let operator_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .rows(3)
+                .placeholder("填写补充信息，不要粘贴凭据或原始日志")
+        });
+        let operator_input_subscription =
+            cx.subscribe(&operator_input, |console, _, event, cx| match event {
+                InputEvent::Change => {
+                    console.operator_submission = SubmissionState::Draft;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}
+            });
         let mut console = Self {
             api_base_url: env::var("OPSMIND_API_BASE_URL")
                 .unwrap_or_else(|_| String::from(DEFAULT_API_BASE_URL)),
@@ -104,10 +127,13 @@ impl OpsMindConsole {
             connection: ConnectionState::Checking,
             catalog: CatalogState::Waiting,
             diagnosis_input,
+            operator_input,
             submission: SubmissionState::Draft,
+            operator_submission: SubmissionState::Draft,
             run: RunState::Idle,
             trajectory: Vec::new(),
             _input_subscription: input_subscription,
+            _operator_input_subscription: operator_input_subscription,
         };
         console.refresh_backend_status(cx);
         console
@@ -170,9 +196,56 @@ impl OpsMindConsole {
         self.start_diagnosis(self.diagnosis_input.read(cx).value().to_string(), cx);
     }
 
+    fn submit_user_input(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let RunState::WaitingForInput { run_id, .. } = &self.run else {
+            return;
+        };
+        let answer = match normalize_diagnosis_query(&self.operator_input.read(cx).value()) {
+            Ok(answer) => answer,
+            Err(()) => {
+                self.operator_submission = SubmissionState::Invalid;
+                cx.notify();
+                return;
+            }
+        };
+        let run_id = run_id.clone();
+        self.operator_submission = SubmissionState::Prepared {
+            query: answer.clone(),
+        };
+        self.run = RunState::ResumingUserInput;
+        self.operator_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        cx.notify();
+
+        let api_base_url = self.api_base_url.clone();
+        let (sender, receiver) = async_channel::bounded(1);
+        cx.background_executor()
+            .spawn(async move {
+                let update = OpsMindApiClient::new(api_base_url)
+                    .resume_with_user_input(&run_id, &ResumeDiagnosisRequest { answer })
+                    .map(StreamUpdate::Resumed)
+                    .unwrap_or(StreamUpdate::ResumeFailed);
+                let _ = sender.send_blocking(update);
+            })
+            .detach();
+
+        let this = cx.weak_entity();
+        let mut async_cx = cx.to_async();
+        cx.foreground_executor()
+            .spawn(async move {
+                if let Ok(update) = receiver.recv().await {
+                    let _ = this.update(&mut async_cx, |console, cx| {
+                        console.apply_stream_update(update);
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+    }
+
     /// 启动后台 SSE 请求，并将安全事件转交给 GPUI 主线程。
     fn start_diagnosis(&mut self, raw_query: String, cx: &mut Context<Self>) {
-        if !self.backend_is_ready() || self.is_running() {
+        if !self.backend_is_ready() || self.is_busy() || self.waiting_for_user_input().is_some() {
             return;
         }
         let query = match normalize_diagnosis_query(&raw_query) {
@@ -232,17 +305,15 @@ impl OpsMindConsole {
                 self.run = RunState::Failed;
             }
             StreamUpdate::Closed { .. } => {}
+            StreamUpdate::Resumed(summary) => self.apply_run_summary(summary),
+            StreamUpdate::ResumeFailed => self.run = RunState::Failed,
         }
     }
 
     fn apply_stream_event(&mut self, event: ServerSentEvent) {
         match event.name.as_str() {
             "run_started" => self.run = RunState::Running { event_count: 0 },
-            "run_finished" => {
-                let status = safe_status(&event.data).unwrap_or_else(|| String::from("unknown"));
-                let step_count = event.data["step_count"].as_u64().unwrap_or_default() as usize;
-                self.run = RunState::Finished { status, step_count };
-            }
+            "run_finished" => self.apply_finished_stream(&event.data),
             "run_failed" => self.run = RunState::Failed,
             event_name => {
                 if let Some(entry) = trajectory_entry(event_name, &event.data) {
@@ -271,6 +342,16 @@ impl OpsMindConsole {
         }
     }
 
+    fn operator_submission_detail(&self) -> String {
+        match &self.operator_submission {
+            SubmissionState::Draft => String::from("补充信息只会用于恢复当前运行。"),
+            SubmissionState::Invalid => String::from("补充信息不能为空，且不得超过 4000 个字符。"),
+            SubmissionState::Prepared { query } => {
+                format!("正在提交 {} 个字符的补充信息。", query.chars().count())
+            }
+        }
+    }
+
     fn backend_is_ready(&self) -> bool {
         matches!(&self.connection, ConnectionState::Ready { .. })
     }
@@ -279,12 +360,87 @@ impl OpsMindConsole {
         matches!(&self.run, RunState::Running { .. })
     }
 
+    fn is_busy(&self) -> bool {
+        matches!(
+            &self.run,
+            RunState::Running { .. } | RunState::ResumingUserInput
+        )
+    }
+
+    fn waiting_for_user_input(&self) -> Option<(&str, &str)> {
+        match &self.run {
+            RunState::WaitingForInput { run_id, question } => Some((run_id, question)),
+            _ => None,
+        }
+    }
+
+    fn apply_finished_stream(&mut self, data: &serde_json::Value) {
+        let status = safe_status(data).unwrap_or_else(|| String::from("unknown"));
+        let step_count = data["step_count"].as_u64().unwrap_or_default() as usize;
+        if status == "waiting_user_input" {
+            let Some(run_id) = data["run_id"]
+                .as_str()
+                .filter(|value| is_safe_run_id(value))
+            else {
+                self.run = RunState::Failed;
+                return;
+            };
+            let Some(question) = data["pending_question"]
+                .as_str()
+                .and_then(safe_pending_question)
+            else {
+                self.run = RunState::Failed;
+                return;
+            };
+            self.run = RunState::WaitingForInput {
+                run_id: run_id.to_owned(),
+                question,
+            };
+            self.operator_submission = SubmissionState::Draft;
+            return;
+        }
+        self.run = RunState::Finished { status, step_count };
+    }
+
+    fn apply_run_summary(&mut self, summary: DiagnosisRunSummary) {
+        let status = summary.status.as_deref().and_then(safe_status_value);
+        let Some(status) = status else {
+            self.run = RunState::Failed;
+            return;
+        };
+        if status == "waiting_user_input" {
+            let Some(question) = summary
+                .pending_question
+                .and_then(|value| safe_pending_question(&value))
+            else {
+                self.run = RunState::Failed;
+                return;
+            };
+            if !is_safe_run_id(&summary.run_id) {
+                self.run = RunState::Failed;
+                return;
+            }
+            self.run = RunState::WaitingForInput {
+                run_id: summary.run_id,
+                question,
+            };
+            self.operator_submission = SubmissionState::Draft;
+            return;
+        }
+        self.run = RunState::Finished {
+            status,
+            step_count: summary.step_count,
+        };
+    }
+
     fn run_detail(&self) -> String {
         match &self.run {
             RunState::Idle => String::from("等待诊断运行事件。"),
             RunState::Running { event_count } => {
                 format!("正在接收安全轨迹事件：{event_count} 条。")
             }
+            RunState::WaitingForInput { .. } => String::from("等待操作人员补充信息。"),
+            RunState::ResumingUserInput => String::from("正在提交补充信息并恢复运行。"),
             RunState::Finished { status, step_count } => {
                 format!("运行结束 · {status} · {step_count} 个步骤")
             }
@@ -310,11 +466,32 @@ fn desktop_identifier(kind: &str) -> String {
 }
 
 fn safe_status(data: &serde_json::Value) -> Option<String> {
-    match data["status"].as_str()? {
+    safe_status_value(data["status"].as_str()?)
+}
+
+fn safe_status_value(value: &str) -> Option<String> {
+    match value {
         "completed" | "blocked" | "waiting_approval" | "waiting_user_input" | "stalled"
-        | "failed" => Some(data["status"].as_str()?.to_owned()),
+        | "failed" => Some(value.to_owned()),
         _ => None,
     }
+}
+
+fn safe_pending_question(value: &str) -> Option<String> {
+    let question = value.trim();
+    if question.is_empty() || question.chars().count() > 2_000 {
+        return None;
+    }
+    Some(question.to_owned())
+}
+
+fn is_safe_run_id(value: &str) -> bool {
+    value.len() == 36
+        && value.chars().enumerate().all(|(index, character)| {
+            matches!(index, 8 | 13 | 18 | 23)
+                .then_some(character == '-')
+                .unwrap_or_else(|| character.is_ascii_hexdigit())
+        })
 }
 
 fn trajectory_entry(event_name: &str, data: &serde_json::Value) -> Option<String> {
@@ -436,11 +613,57 @@ impl Render for OpsMindConsole {
                                         Button::new("prepare-diagnosis")
                                             .label("开始诊断")
                                             .primary()
-                                            .loading(self.is_running())
-                                            .disabled(!self.backend_is_ready() || self.is_running())
+                                            .loading(self.is_busy())
+                                            .disabled(
+                                                !self.backend_is_ready()
+                                                    || self.is_busy()
+                                                    || self.waiting_for_user_input().is_some(),
+                                            )
                                             .on_click(cx.listener(Self::submit_diagnosis)),
                                     ),
                             ),
+                    )
+                    .when_some(
+                        self.waiting_for_user_input()
+                            .map(|(_, question)| question.to_owned()),
+                        |this, question| {
+                            this.child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .p(px(18.0))
+                                    .gap(px(12.0))
+                                    .bg(rgb(0x1a2024))
+                                    .child(
+                                        div()
+                                            .text_color(rgb(0xffb000))
+                                            .child("OPERATOR INPUT REQUIRED"),
+                                    )
+                                    .child(div().child(question))
+                                    .child(Input::new(&self.operator_input).h(px(92.0)))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                div()
+                                                    .text_color(rgb(0xaab6bc))
+                                                    .child(self.operator_submission_detail()),
+                                            )
+                                            .child(
+                                                Button::new("resume-with-user-input")
+                                                    .label("提交并继续")
+                                                    .primary()
+                                                    .loading(self.is_busy())
+                                                    .disabled(
+                                                        !self.backend_is_ready() || self.is_busy(),
+                                                    )
+                                                    .on_click(cx.listener(Self::submit_user_input)),
+                                            ),
+                                    ),
+                            )
+                        },
                     ),
             )
     }
@@ -498,7 +721,9 @@ fn main() {
 mod tests {
     use serde_json::json;
 
-    use super::{normalize_diagnosis_query, trajectory_entry};
+    use super::{
+        is_safe_run_id, normalize_diagnosis_query, safe_pending_question, trajectory_entry,
+    };
 
     #[test]
     fn normalizes_a_diagnosis_query() {
@@ -539,5 +764,17 @@ mod tests {
         );
 
         assert!(entry.is_none());
+    }
+
+    #[test]
+    fn accepts_only_bounded_operator_questions_and_uuid_run_ids() {
+        assert_eq!(
+            safe_pending_question("  请确认受影响的服务。  "),
+            Some(String::from("请确认受影响的服务。"))
+        );
+        assert!(safe_pending_question(" ").is_none());
+        assert!(safe_pending_question(&"x".repeat(2_001)).is_none());
+        assert!(is_safe_run_id("018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1"));
+        assert!(!is_safe_run_id("../../unexpected-path"));
     }
 }
