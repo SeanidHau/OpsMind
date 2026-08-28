@@ -141,6 +141,14 @@ uv run python -m scripts.run_benchmark
 
 命令使用当前模型、工具和可选 RAG 配置运行全部样本，并输出轨迹、根因和工具证据检查结果。CI 使用 `--fail-on-failure`；任一样本未通过时，命令以状态码 `1` 退出。
 
+默认文件是 4 条烟雾样本。完整评测集包含 50 条样本，运行时会产生更多模型调用，因此必须显式指定：
+
+```bash
+uv run python -m scripts.run_benchmark \
+  --cases-file data/evaluations/diagnosis_cases_full.json \
+  --fail-on-failure
+```
+
 ### 启动 GPUI 桌面工作台
 
 先启动 FastAPI 服务。配置模型供应商后，工作台才能创建真实诊断运行。

@@ -1,0 +1,482 @@
+[
+  {
+    "case_id": "order-core-01",
+    "user_query": "订单服务 HTTP 5xx 达到 18%，请定位故障。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "checkout-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "order-core-02",
+    "user_query": "订单创建失败率突然升高，checkout-service 返回 502，协助诊断。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "checkout-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "order-core-03",
+    "user_query": "order-service 出现大量上游响应错误，请检查订单故障。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "checkout-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "order-core-04",
+    "user_query": "订单接口 P95 延迟升高且有 5xx，排查根因。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "checkout-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "order-core-05",
+    "user_query": "订单服务调用结算链路后持续报 502，请给出诊断。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "checkout-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "order-core-06",
+    "user_query": "订单创建请求失败，日志包含 upstream response error。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "checkout-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "order-core-07",
+    "user_query": "订单服务错误率升高，怀疑下游依赖异常，请收集证据。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "checkout-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "order-core-08",
+    "user_query": "订单服务高峰期 HTTP 5xx 增多，排查处理路径。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "checkout-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "order-core-09",
+    "user_query": "订单请求在调用 checkout-service 后失败，请分析。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "checkout-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "order-core-10",
+    "user_query": "订单服务报警：上游 502 与创建失败同时出现。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "checkout-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "payment-core-01",
+    "user_query": "支付服务请求超时，数据库连接池耗尽，请定位原因。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "connection pool",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "payment-core-02",
+    "user_query": "payment-service 错误率升高，日志出现 database connection pool exhausted。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "connection pool",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "payment-core-03",
+    "user_query": "支付接口延迟升高到 2500ms，请排查连接池问题。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "connection pool",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "payment-core-04",
+    "user_query": "支付服务大量超时，怀疑数据库连接没有释放。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "connection pool",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "payment-core-05",
+    "user_query": "支付链路出现连接池耗尽告警，请收集日志和指标。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "connection pool",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "payment-core-06",
+    "user_query": "支付请求失败率 12%，数据库连接资源不足，协助诊断。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "connection pool",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "payment-core-07",
+    "user_query": "payment-service 访问数据库时超时，排查根因。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "connection pool",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "payment-core-08",
+    "user_query": "支付服务延迟突然恶化，并发现 connection pool exhausted。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "connection pool",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "payment-core-09",
+    "user_query": "支付处理请求排队，数据库连接池利用率已满。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "connection pool",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "payment-core-10",
+    "user_query": "支付接口 5xx 增多，日志显示连接池耗尽。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "connection pool",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "inventory-core-01",
+    "user_query": "库存服务 P99 延迟升高，请定位依赖问题。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "catalog-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "inventory-core-02",
+    "user_query": "inventory-service 查询超过延迟阈值，catalog-service 变慢。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "catalog-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "inventory-core-03",
+    "user_query": "库存接口 P99 达到 4700ms，协助排查。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "catalog-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "inventory-core-04",
+    "user_query": "库存查询持续超时，下游目录服务响应异常。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "catalog-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "inventory-core-05",
+    "user_query": "库存服务延迟升高但错误率不高，请收集证据。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "catalog-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "inventory-core-06",
+    "user_query": "inventory-service 的查询耗时异常，怀疑 catalog-service。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "catalog-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "inventory-core-07",
+    "user_query": "库存服务告警：P95 与 P99 同时升高。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "catalog-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "inventory-core-08",
+    "user_query": "库存查询在调用目录服务后变慢，请分析根因。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "catalog-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "inventory-core-09",
+    "user_query": "库存读请求出现严重长尾延迟，排查依赖关系。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "catalog-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "inventory-core-10",
+    "user_query": "库存服务响应时间升高，日志记录 downstream catalog-service response time increased。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "catalog-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "recommendation-core-01",
+    "user_query": "推荐服务 Redis 缓存命中率下降且出现 command timeout。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "redis",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "recommendation-core-02",
+    "user_query": "recommendation-service 延迟升高，怀疑 Redis 缓存异常。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "redis",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "recommendation-core-03",
+    "user_query": "推荐接口错误率上升，日志显示 redis command timeout。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "redis",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "recommendation-core-04",
+    "user_query": "推荐服务缓存命中率仅 31%，请定位问题。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "redis",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "recommendation-core-05",
+    "user_query": "推荐请求变慢并出现读取缓存超时，协助诊断。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "redis",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "recommendation-core-06",
+    "user_query": "recommendation-service 报警：Redis cache hit rate dropped。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "redis",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "recommendation-core-07",
+    "user_query": "推荐服务 P95 延迟升高，排查缓存链路。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "redis",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "recommendation-core-08",
+    "user_query": "推荐服务访问 Redis 时超时，分析根因。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "redis",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "recommendation-core-09",
+    "user_query": "推荐服务缓存失效增多，错误率达到 8%。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "redis",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "recommendation-core-10",
+    "user_query": "推荐服务告警中同时包含缓存命中率下降和 command timeout。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "redis",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "misleading-order-01",
+    "user_query": "订单服务 HTTP 5xx 升高，同事认为是 Redis，但日志提示 checkout-service 返回 502。请基于证据诊断。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "checkout-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "misleading-payment-01",
+    "user_query": "支付服务超时，有人怀疑前端发布；但数据库日志已经出现 connection pool exhausted。请排查。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "connection pool",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "misleading-inventory-01",
+    "user_query": "库存服务 P99 升高，有人怀疑 Redis；当前日志指出 catalog-service 响应变慢。请诊断。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "catalog-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "misleading-recommendation-01",
+    "user_query": "推荐服务延迟升高，有人怀疑 PostgreSQL；日志中存在 Redis command timeout。请排查。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "redis",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "missing-information-01",
+    "user_query": "线上服务出现异常，请协助排查。",
+    "expected_terminal_status": "waiting_user_input"
+  },
+  {
+    "case_id": "missing-information-02",
+    "user_query": "系统延迟升高，但我暂时没有服务名称和时间范围。",
+    "expected_terminal_status": "waiting_user_input"
+  },
+  {
+    "case_id": "missing-information-03",
+    "user_query": "错误率告警了，请判断根因。",
+    "expected_terminal_status": "waiting_user_input"
+  },
+  {
+    "case_id": "missing-information-04",
+    "user_query": "业务请求失败，需要诊断，但没有日志、指标或受影响服务。",
+    "expected_terminal_status": "waiting_user_input"
+  },
+  {
+    "case_id": "knowledge-gap-01",
+    "user_query": "订单服务 HTTP 5xx 升高，尚未提供 Kubernetes 配置变更记录。请先根据现有场景证据排查。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "checkout-service",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  },
+  {
+    "case_id": "knowledge-gap-02",
+    "user_query": "推荐服务缓存超时，当前没有缓存配置变更 Runbook。请基于现有日志和指标诊断。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "redis",
+    "expected_evidence_tools": [
+      "query_logs",
+      "query_metrics"
+    ]
+  }
+]

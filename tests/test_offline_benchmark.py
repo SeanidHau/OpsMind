@@ -1,5 +1,6 @@
 """离线 benchmark 聚合与样本期望的验收测试。"""
 
+from collections import Counter
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -157,6 +158,27 @@ def test_loader_reads_committed_diagnosis_cases() -> None:
         "inventory-latency",
         "recommendation-redis-cache",
     ]
+
+
+def test_loader_reads_full_benchmark_with_declared_coverage() -> None:
+    """完整基准集必须保留 50 条样本和各类预期路径。"""
+    cases = load_benchmark_cases(Path("data/evaluations/diagnosis_cases_full.json"))
+
+    assert len(cases) == 50
+    assert Counter(case.case_id.split("-", maxsplit=1)[0] for case in cases) == {
+        "order": 10,
+        "payment": 10,
+        "inventory": 10,
+        "recommendation": 10,
+        "misleading": 4,
+        "missing": 4,
+        "knowledge": 2,
+    }
+    assert sum(case.expected_terminal_status is HarnessStatus.COMPLETED for case in cases) == 46
+    assert (
+        sum(case.expected_terminal_status is HarnessStatus.WAITING_USER_INPUT for case in cases)
+        == 4
+    )
 
 
 def test_loader_rejects_duplicate_case_ids(tmp_path: Path) -> None:
