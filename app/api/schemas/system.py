@@ -14,3 +14,13 @@ class HealthResponse(BaseModel):
     status: Literal["ok"]
     service: Literal["opsmind"]
     version: str
+
+
+class ReadinessResponse(BaseModel):
+    """服务依赖就绪状态的安全响应契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ready", "not_ready"]
+    postgres: Literal["ok", "not_configured", "unavailable"]
+    milvus: Literal["ok", "unavailable"]

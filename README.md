@@ -56,6 +56,14 @@ RUN_ARCHIVE_BACKEND=postgres
 
 未启动 PostgreSQL 时，不要设置 `RUN_ARCHIVE_BACKEND=postgres`。应用启动会失败，以避免将配置错误静默降级为内存归档。
 
+### 检查依赖就绪状态
+
+`GET /api/v1/health` 只检查 FastAPI 进程。`GET /api/v1/ready` 额外检查启用的 PostgreSQL 归档和 Milvus。依赖未就绪时，`/ready` 返回 `503`，但不会返回连接串或原始异常。
+
+```bash
+curl http://127.0.0.1:8000/api/v1/ready
+```
+
 4. 运行项目验收。
 
    ```bash

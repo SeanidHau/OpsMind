@@ -77,6 +77,11 @@ class PostgresRunArchive:
         """释放数据库连接池。"""
         await self._engine.dispose()
 
+    async def ping(self) -> None:
+        """验证归档数据库可接受最小只读查询。"""
+        async with self._engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+
     async def save(self, snapshot: RunSnapshot) -> None:
         """插入新快照，重复运行 ID 保持与内存归档一致的语义。"""
         try:
