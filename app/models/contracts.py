@@ -703,6 +703,23 @@ class BenchmarkCaseResult(BaseModel):
     trajectory_evaluation: TrajectoryEvaluation
 
 
+class BenchmarkMetrics(BaseModel):
+    """从同批运行快照汇总的可比较实验指标。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_count: int = Field(gt=0)
+    completed_run_count: int = Field(ge=0)
+    completion_rate: float = Field(ge=0, le=1)
+    trajectory_pass_rate: float = Field(ge=0, le=1)
+    average_tool_calls: float = Field(ge=0)
+    duplicate_tool_call_rate: float = Field(ge=0, le=1)
+    average_model_calls: float = Field(ge=0)
+    average_used_tokens: float = Field(ge=0)
+    average_context_chars: float = Field(ge=0)
+    terminal_status_counts: dict[str, int]
+
+
 class BenchmarkResult(BaseModel):
     """一批离线评测样本的汇总结果。"""
 
@@ -711,6 +728,7 @@ class BenchmarkResult(BaseModel):
     passed: bool
     score: float = Field(ge=0, le=1)
     case_results: list[BenchmarkCaseResult] = Field(min_length=1)
+    metrics: BenchmarkMetrics
     evaluated_at: datetime = Field(default_factory=utc_now)
 
 
@@ -784,6 +802,7 @@ __all__ = [
     "ApprovalDecision",
     "ApprovalResolution",
     "BenchmarkCaseResult",
+    "BenchmarkMetrics",
     "BenchmarkResult",
     "BudgetConsumption",
     "BudgetState",

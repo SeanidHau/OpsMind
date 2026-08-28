@@ -139,7 +139,7 @@ uv run python -m scripts.evaluate_retrieval --fail-on-miss
 uv run python -m scripts.run_benchmark
 ```
 
-命令使用当前模型、工具和可选 RAG 配置运行全部样本，并输出轨迹、根因和工具证据检查结果。CI 使用 `--fail-on-failure`；任一样本未通过时，命令以状态码 `1` 退出。
+命令使用当前模型、工具和可选 RAG 配置运行全部样本，并输出轨迹、根因和工具证据检查结果。输出还包含完成率、轨迹通过率、平均工具/模型调用、重复工具调用率、平均 Token 和上下文长度。CI 使用 `--fail-on-failure`；任一样本未通过时，命令以状态码 `1` 退出。
 
 默认文件是 4 条烟雾样本。完整评测集包含 50 条样本，运行时会产生更多模型调用，因此必须显式指定：
 

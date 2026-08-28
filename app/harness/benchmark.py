@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Protocol
 
@@ -10,10 +11,13 @@ from app.harness.evaluation import TrajectoryEvaluator
 from app.harness.snapshot import RunSnapshotFactory
 from app.models.contracts import (
     BenchmarkCaseResult,
+    BenchmarkMetrics,
     BenchmarkResult,
     DiagnosisState,
     EvaluationCase,
     EvaluationCheck,
+    EventType,
+    HarnessStatus,
     RunSnapshot,
 )
 
@@ -85,8 +89,10 @@ class OfflineBenchmarkRunner:
         if not cases:
             raise ValueError("cases must not be empty")
 
+        snapshots = [await subject.run_case(case) for case in cases]
         case_results = [
-            self._evaluate_case(case=case, snapshot=await subject.run_case(case)) for case in cases
+            self._evaluate_case(case=case, snapshot=snapshot)
+            for case, snapshot in zip(cases, snapshots, strict=True)
         ]
         score = sum(result.score for result in case_results) / len(case_results)
 
@@ -94,7 +100,94 @@ class OfflineBenchmarkRunner:
             passed=all(result.passed for result in case_results),
             score=score,
             case_results=case_results,
+            metrics=self._build_metrics(case_results=case_results, snapshots=snapshots),
         )
+
+    @staticmethod
+    def _build_metrics(
+        *,
+        case_results: list[BenchmarkCaseResult],
+        snapshots: list[RunSnapshot],
+    ) -> BenchmarkMetrics:
+        """从已评测快照提取实验对比所需的稳定统计指标。"""
+        run_count = len(snapshots)
+        completed_run_count = sum(
+            snapshot.terminal_status is HarnessStatus.COMPLETED for snapshot in snapshots
+        )
+        trajectory_pass_count = sum(
+            case_result.trajectory_evaluation.passed for case_result in case_results
+        )
+        tool_call_counts = [
+            OfflineBenchmarkRunner._non_negative_int(snapshot.final_state.get("tool_call_count"))
+            for snapshot in snapshots
+        ]
+        model_call_counts = [
+            OfflineBenchmarkRunner._budget_value(snapshot, "used_model_calls")
+            for snapshot in snapshots
+        ]
+        used_tokens = [
+            OfflineBenchmarkRunner._budget_value(snapshot, "used_tokens") for snapshot in snapshots
+        ]
+        context_sizes = [
+            int(event.observation["total_chars"])
+            for snapshot in snapshots
+            for event in snapshot.trajectory
+            if event.event_type is EventType.CONTEXT_BUILT
+            and isinstance(event.observation, dict)
+            and isinstance(event.observation.get("total_chars"), int)
+            and event.observation["total_chars"] >= 0
+        ]
+        tool_fingerprints = [
+            json.dumps(
+                {"tool_name": event.action.tool_name, "tool_args": event.action.tool_args},
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            for snapshot in snapshots
+            for event in snapshot.trajectory
+            if event.event_type is EventType.TOOL_FINISHED and event.action is not None
+        ]
+        duplicate_tool_calls = len(tool_fingerprints) - len(set(tool_fingerprints))
+        terminal_status_counts = Counter(
+            snapshot.terminal_status.value if snapshot.terminal_status is not None else "unknown"
+            for snapshot in snapshots
+        )
+
+        return BenchmarkMetrics(
+            run_count=run_count,
+            completed_run_count=completed_run_count,
+            completion_rate=completed_run_count / run_count,
+            trajectory_pass_rate=trajectory_pass_count / run_count,
+            average_tool_calls=sum(tool_call_counts) / run_count,
+            duplicate_tool_call_rate=(
+                duplicate_tool_calls / len(tool_fingerprints) if tool_fingerprints else 0
+            ),
+            average_model_calls=sum(model_call_counts) / run_count,
+            average_used_tokens=sum(used_tokens) / run_count,
+            average_context_chars=(sum(context_sizes) / len(context_sizes) if context_sizes else 0),
+            terminal_status_counts=dict(sorted(terminal_status_counts.items())),
+        )
+
+    @staticmethod
+    def _budget_value(snapshot: RunSnapshot, field_name: str) -> int:
+        """从已归档预算中读取非负数值；无效历史快照按零计。"""
+        budget = snapshot.final_state.get("budget")
+        return (
+            OfflineBenchmarkRunner._non_negative_int(budget.get(field_name))
+            if isinstance(budget, dict)
+            else 0
+        )
+
+    @staticmethod
+    def _non_negative_int(value: object) -> int:
+        """将快照中的未知数值安全转换为非负整数。"""
+        if not isinstance(value, int | float | str):
+            return 0
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 0
 
     def _evaluate_case(
         self,

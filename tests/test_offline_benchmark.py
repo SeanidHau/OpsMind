@@ -13,6 +13,8 @@ from app.harness.benchmark import (
 )
 from app.harness.loop import create_initial_state
 from app.models.contracts import (
+    ActionType,
+    AgentAction,
     AgentEvent,
     BudgetState,
     DiagnosisReport,
@@ -136,6 +138,72 @@ async def test_benchmark_reports_failed_business_expectations() -> None:
     checks = checks_by_name(result.case_results[0])
     assert checks["expected_root_cause"] is False
     assert checks["expected_evidence_tools"] is False
+
+
+@pytest.mark.asyncio
+async def test_benchmark_aggregates_comparison_metrics_from_snapshots() -> None:
+    """实验指标必须从归档快照和轨迹计算，不依赖模型文本。"""
+    snapshot = completed_snapshot()
+    repeated_action = AgentAction(
+        action_type=ActionType.CALL_TOOL,
+        intent="查询支付服务指标",
+        tool_name="query_metrics",
+        tool_args={"service": "payment-service"},
+        reason="收集诊断证据。",
+    )
+    snapshot.final_state.update(
+        {
+            "tool_call_count": 2,
+            "budget": BudgetState(
+                max_steps=5,
+                max_tool_calls=3,
+                max_model_calls=3,
+                max_tokens=1_000,
+                max_runtime_seconds=60,
+                max_estimated_cost_usd=1.0,
+                used_steps=2,
+                used_tool_calls=2,
+                used_model_calls=3,
+                used_tokens=42,
+            ).model_dump(mode="json"),
+        }
+    )
+    snapshot.trajectory = [
+        AgentEvent(
+            run_id=snapshot.run_id,
+            event_type=EventType.CONTEXT_BUILT,
+            step_id=0,
+            observation={"total_chars": 120},
+        ),
+        AgentEvent(
+            run_id=snapshot.run_id,
+            event_type=EventType.TOOL_FINISHED,
+            step_id=1,
+            action=repeated_action,
+        ),
+        AgentEvent(
+            run_id=snapshot.run_id,
+            event_type=EventType.TOOL_FINISHED,
+            step_id=2,
+            action=repeated_action,
+        ),
+        *snapshot.trajectory,
+    ]
+
+    result = await OfflineBenchmarkRunner().run(
+        cases=[case("metric-case")],
+        subject=FixedBenchmarkSubject(snapshot),
+    )
+
+    assert result.metrics.run_count == 1
+    assert result.metrics.completion_rate == 1.0
+    assert result.metrics.trajectory_pass_rate == 1.0
+    assert result.metrics.average_tool_calls == 2.0
+    assert result.metrics.duplicate_tool_call_rate == 0.5
+    assert result.metrics.average_model_calls == 3.0
+    assert result.metrics.average_used_tokens == 42.0
+    assert result.metrics.average_context_chars == 120.0
+    assert result.metrics.terminal_status_counts == {"completed": 1}
 
 
 @pytest.mark.asyncio
