@@ -11,7 +11,7 @@ mod api_client;
 
 use gpui::{
     App, Application, Bounds, ClickEvent, Context, Entity, IntoElement, Render, Subscription,
-    Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, rgba, size,
 };
 use gpui_component::{
     Disableable as _, Root,
@@ -43,6 +43,7 @@ struct OpsMindConsole {
     submission: SubmissionState,
     operator_submission: SubmissionState,
     approval_submission: SubmissionState,
+    page: WorkspacePage,
     run: RunState,
     trajectory: Vec<String>,
     _input_subscription: Subscription,
@@ -50,9 +51,16 @@ struct OpsMindConsole {
     _approval_input_subscription: Subscription,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkspacePage {
+    Investigation,
+    Knowledge,
+    History,
+}
+
 enum ConnectionState {
     Checking,
-    Ready { version: String },
+    Ready,
     Unavailable,
 }
 
@@ -106,7 +114,6 @@ enum StreamUpdate {
 }
 
 struct BootstrapSnapshot {
-    version: String,
     scenario_count: usize,
 }
 
@@ -172,6 +179,7 @@ impl OpsMindConsole {
             submission: SubmissionState::Draft,
             operator_submission: SubmissionState::Draft,
             approval_submission: SubmissionState::Draft,
+            page: WorkspacePage::Investigation,
             run: RunState::Idle,
             trajectory: Vec::new(),
             _input_subscription: input_subscription,
@@ -205,9 +213,7 @@ impl OpsMindConsole {
     fn apply_bootstrap_snapshot(&mut self, snapshot: Result<BootstrapSnapshot, ()>) {
         match snapshot {
             Ok(snapshot) => {
-                self.connection = ConnectionState::Ready {
-                    version: snapshot.version,
-                };
+                self.connection = ConnectionState::Ready;
                 self.catalog = CatalogState::Ready {
                     count: snapshot.scenario_count,
                 };
@@ -221,18 +227,33 @@ impl OpsMindConsole {
 
     fn connection_detail(&self) -> String {
         match &self.connection {
-            ConnectionState::Checking => String::from("正在检查 FastAPI 服务…"),
-            ConnectionState::Ready { version } => format!("已连接 · API {version}"),
-            ConnectionState::Unavailable => String::from("服务不可用 · 检查后端是否已启动"),
+            ConnectionState::Checking => String::from("正在连接服务…"),
+            ConnectionState::Ready => String::from("服务已连接"),
+            ConnectionState::Unavailable => String::from("暂时无法连接服务"),
         }
     }
 
     fn catalog_detail(&self) -> String {
         match &self.catalog {
-            CatalogState::Waiting => String::from("正在读取可用场景…"),
-            CatalogState::Ready { count } => format!("已加载 {count} 个安全场景摘要"),
-            CatalogState::Unavailable => String::from("连接恢复后将重新读取场景目录"),
+            CatalogState::Waiting => String::from("正在加载可选场景…"),
+            CatalogState::Ready { count } => format!("可选场景 {count} 个"),
+            CatalogState::Unavailable => String::from("连接后即可查看可选场景"),
         }
+    }
+
+    fn show_investigation(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.page = WorkspacePage::Investigation;
+        cx.notify();
+    }
+
+    fn show_knowledge(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.page = WorkspacePage::Knowledge;
+        cx.notify();
+    }
+
+    fn show_history(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.page = WorkspacePage::History;
+        cx.notify();
     }
 
     fn submit_diagnosis(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -506,7 +527,7 @@ impl OpsMindConsole {
     }
 
     fn backend_is_ready(&self) -> bool {
-        matches!(&self.connection, ConnectionState::Ready { .. })
+        matches!(&self.connection, ConnectionState::Ready)
     }
 
     fn is_running(&self) -> bool {
@@ -675,22 +696,20 @@ impl OpsMindConsole {
 
     fn run_detail(&self) -> String {
         match &self.run {
-            RunState::Idle => String::from("等待诊断运行事件。"),
-            RunState::Running { event_count } => {
-                format!("正在接收安全轨迹事件：{event_count} 条。")
-            }
-            RunState::WaitingForInput { .. } => String::from("等待操作人员补充信息。"),
-            RunState::ResumingUserInput => String::from("正在提交补充信息并恢复运行。"),
-            RunState::WaitingForApproval { .. } => String::from("等待高风险动作审批。"),
-            RunState::RecordingApproval => String::from("正在记录审批决议。"),
-            RunState::ApprovalRecorded { .. } => String::from("审批已记录，等待显式续跑。"),
-            RunState::ResumingApproval => String::from("正在恢复已批准的动作。"),
+            RunState::Idle => String::from("等待开始分析。"),
+            RunState::Running { event_count } => format!("正在分析，已完成 {event_count} 项。"),
+            RunState::WaitingForInput { .. } => String::from("需要补充信息。"),
+            RunState::ResumingUserInput => String::from("正在继续分析。"),
+            RunState::WaitingForApproval { .. } => String::from("等待确认操作。"),
+            RunState::RecordingApproval => String::from("正在记录确认结果。"),
+            RunState::ApprovalRecorded { .. } => String::from("已确认，等待继续。"),
+            RunState::ResumingApproval => String::from("正在继续分析。"),
             RunState::Finished {
                 status, step_count, ..
             } => {
-                format!("运行结束 · {status} · {step_count} 个步骤")
+                format!("分析结束 · {} · {step_count} 个步骤", status_label(status))
             }
-            RunState::Failed => String::from("运行未完成。请检查后端服务后重试。"),
+            RunState::Failed => String::from("本次分析未完成，请稍后重试。"),
         }
     }
 }
@@ -776,16 +795,40 @@ fn trajectory_entry(event_name: &str, data: &serde_json::Value) -> Option<String
     }
 
     let step_id = data["step_id"].as_u64()?;
-    let tool_name = data["tool_name"].as_str();
     let latency_ms = data["latency_ms"].as_u64();
-    let mut entry = format!("#{step_id} · {event_name}");
-    if let Some(tool_name) = tool_name {
-        entry.push_str(&format!(" · {tool_name}"));
-    }
+    let mut entry = format!("步骤 {step_id} · {}", event_label(event_name));
     if let Some(latency_ms) = latency_ms {
-        entry.push_str(&format!(" · {latency_ms} ms"));
+        entry.push_str(&format!(" · 耗时 {latency_ms} ms"));
     }
     Some(entry)
+}
+
+fn event_label(event_name: &str) -> &'static str {
+    match event_name {
+        "plan_created" | "plan_revised" => "正在规划",
+        "context_built" | "context_compressed" => "整理信息",
+        "model_called" | "model_retry" => "正在分析",
+        "action_proposed" | "action_blocked" => "评估操作",
+        "tool_started" | "tool_retry" => "正在查询",
+        "tool_finished" | "observation_recorded" | "evidence_collected" => "收集证据",
+        "verification_failed" => "需要进一步确认",
+        "checkpoint_saved" | "run_paused" | "run_resumed" => "保存进度",
+        "run_completed" => "分析完成",
+        "run_failed" => "分析未完成",
+        _ => "正在处理",
+    }
+}
+
+fn status_label(status: &str) -> &'static str {
+    match status {
+        "completed" => "已完成",
+        "blocked" => "需要处理",
+        "waiting_approval" => "等待确认",
+        "waiting_user_input" => "需要补充信息",
+        "stalled" => "暂时停滞",
+        "failed" => "未完成",
+        _ => "状态未知",
+    }
 }
 
 fn is_safe_trajectory_event(event_name: &str) -> bool {
@@ -815,23 +858,29 @@ fn is_safe_trajectory_event(event_name: &str) -> bool {
 
 fn load_bootstrap_snapshot(api_base_url: String) -> Result<BootstrapSnapshot, ()> {
     let client = OpsMindApiClient::new(api_base_url);
-    let health = client.health().map_err(|_| ())?;
+    let _health = client.health().map_err(|_| ())?;
     let scenarios = client.scenarios().map_err(|_| ())?;
 
     Ok(BootstrapSnapshot {
-        version: health.version,
         scenario_count: scenarios.len(),
     })
 }
 
 impl Render for OpsMindConsole {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (page_title, page_description) = match self.page {
+            WorkspacePage::Investigation => {
+                ("诊断", "输入问题现象，系统将协助收集信息并给出分析结论。")
+            }
+            WorkspacePage::Knowledge => ("知识库", "查看与诊断相关的操作说明和处理经验。"),
+            WorkspacePage::History => ("历史记录", "查看本次应用中已完成的诊断记录。"),
+        };
         div()
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(0x0e1114))
-            .text_color(rgb(0xf3f0e8))
+            .bg(rgb(0xe8f1f7))
+            .text_color(rgb(0x24313a))
             .child(
                 div()
                     .flex()
@@ -839,9 +888,9 @@ impl Render for OpsMindConsole {
                     .items_center()
                     .px(px(20.0))
                     .py(px(12.0))
-                    .bg(rgb(0x151a1f))
+                    .bg(rgba(0xffffff9e))
                     .border_b_1()
-                    .border_color(rgb(0x2a333d))
+                    .border_color(rgba(0xffffffc7))
                     .child(
                         div()
                             .flex()
@@ -851,8 +900,8 @@ impl Render for OpsMindConsole {
                                 div()
                                     .size(px(28.0))
                                     .rounded(px(7.0))
-                                    .bg(rgb(0xd6f36a))
-                                    .text_color(rgb(0x111710))
+                                    .bg(rgb(0x6ca8c3))
+                                    .text_color(rgb(0xffffff))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -867,8 +916,8 @@ impl Render for OpsMindConsole {
                                     .child(
                                         div()
                                             .text_size(px(10.0))
-                                            .text_color(rgb(0x9eaaa0))
-                                            .child("Agent harness workbench"),
+                                            .text_color(rgb(0x75818d))
+                                            .child("智能诊断工作台"),
                                     ),
                             ),
                     )
@@ -877,7 +926,7 @@ impl Render for OpsMindConsole {
                             .px(px(12.0))
                             .py(px(6.0))
                             .rounded(px(999.0))
-                            .bg(rgb(0x1b2420))
+                            .bg(rgba(0xffffff8f))
                             .border_1()
                             .border_color(connection_color(&self.connection))
                             .text_size(px(11.0))
@@ -889,7 +938,7 @@ impl Render for OpsMindConsole {
                 div()
                     .flex()
                     .flex_1()
-                    .child(workbench_sidebar(&self.catalog_detail()))
+                    .child(workbench_sidebar(&self.catalog_detail(), self.page, cx))
                     .child(
                         div()
                             .flex()
@@ -903,29 +952,29 @@ impl Render for OpsMindConsole {
                                     .items_center()
                                     .justify_between()
                                     .border_b_1()
-                                    .border_color(rgb(0x2a333d))
+                                    .border_color(rgba(0xffffffbd))
                                     .pb(px(14.0))
                                     .child(
                                         div()
                                             .flex()
                                             .items_center()
                                             .gap(px(10.0))
-                                            .child(div().text_size(px(12.0)).child("Investigations"))
+                                            .child(div().text_size(px(12.0)).child(page_title))
                                             .child(
                                                 div()
                                                     .px(px(8.0))
                                                     .py(px(3.0))
                                                     .rounded(px(999.0))
-                                                    .bg(rgb(0x243126))
+                                                    .bg(rgb(0xdcebF4))
                                                     .text_size(px(10.0))
-                                                    .text_color(rgb(0xd6f36a))
-                                                    .child("NEW"),
+                                                    .text_color(rgb(0x4f829c))
+                                                    .child("新建"),
                                             ),
                                     )
                                     .child(
                                         div()
                                             .text_size(px(11.0))
-                                            .text_color(rgb(0x839087))
+                                            .text_color(rgb(0x75818d))
                                             .child("⌘↵ 运行"),
                                     ),
                             )
@@ -939,205 +988,237 @@ impl Render for OpsMindConsole {
                                             .flex()
                                             .flex_col()
                                             .gap(px(6.0))
-                                            .child(div().text_xl().child("新建调查"))
+                                            .child(div().text_xl().child(page_title))
                                             .child(
                                                 div()
-                                                    .text_color(rgb(0x9eaaa0))
-                                                    .child("输入现象，Harness 将规划工具调用、收集证据并验证结论。"),
+                                                    .text_color(rgb(0x697783))
+                                                    .child(page_description),
                                             ),
                                     )
-                                    .child(div().text_color(rgb(0xd6f36a)).child("UNTITLED")),
+                                    .child(div().text_color(rgb(0x5a8da7)).child("未命名")),
                             )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .p(px(18.0))
-                                    .gap(px(12.0))
-                                    .rounded(px(10.0))
-                                    .bg(rgb(0x151b20))
-                                    .border_1()
-                                    .border_color(rgb(0x33404a))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .justify_between()
-                                            .child(
-                                                div()
-                                                    .text_size(px(10.0))
-                                                    .text_color(rgb(0x8fa29a))
-                                                    .child("INCIDENT BRIEF.md"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(10.0))
-                                                    .text_color(rgb(0xd6f36a))
-                                                    .child("READY TO RUN"),
-                                            ),
-                                    )
-                                    .child(Input::new(&self.diagnosis_input).h(px(150.0)))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(
-                                                div()
-                                                    .text_color(rgb(0x9eaaa0))
-                                                    .child(self.submission_detail()),
-                                            )
-                                            .child(
-                                                Button::new("prepare-diagnosis")
-                                                    .label("运行调查  →")
-                                                    .primary()
-                                                    .loading(self.is_busy())
-                                                    .disabled(
-                                                        !self.backend_is_ready()
-                                                            || self.is_busy()
-                                                            || self.waiting_for_user_input().is_some()
-                                                            || self.waiting_for_approval().is_some()
-                                                            || self.approval_is_recorded().is_some(),
-                                                    )
-                                                    .on_click(cx.listener(Self::submit_diagnosis)),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap(px(12.0))
-                                    .child(panel("API LINK", &self.connection_detail()))
-                                    .child(panel("RUN STATUS", &self.run_detail())),
-                            )
-                            .when_some(
-                                self.waiting_for_user_input()
-                                    .map(|(_, question)| question.to_owned()),
-                                |this, question| {
-                                    this.child(
-                                        intervention_panel("OPERATOR INPUT REQUIRED", question)
-                                            .child(Input::new(&self.operator_input).h(px(86.0)))
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_between()
-                                                    .child(
-                                                        div()
-                                                            .text_color(rgb(0x9eaaa0))
-                                                            .child(self.operator_submission_detail()),
-                                                    )
-                                                    .child(
-                                                        Button::new("resume-with-user-input")
-                                                            .label("提交并继续  →")
-                                                            .primary()
-                                                            .loading(self.is_busy())
-                                                            .disabled(
-                                                                !self.backend_is_ready()
-                                                                    || self.is_busy(),
-                                                            )
-                                                            .on_click(
-                                                                cx.listener(Self::submit_user_input),
+                            .when(self.page == WorkspacePage::Investigation, |this| {
+                                this.child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .p(px(18.0))
+                                        .gap(px(12.0))
+                                        .rounded(px(14.0))
+                                        .bg(rgba(0xffffffa3))
+                                        .border_1()
+                                        .border_color(rgba(0xffffffd1))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .justify_between()
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.0))
+                                                        .text_color(rgb(0x71808b))
+                                                        .child("诊断说明"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.0))
+                                                        .text_color(rgb(0x4f829c))
+                                                        .child("可以开始"),
+                                                ),
+                                        )
+                                        .child(Input::new(&self.diagnosis_input).h(px(150.0)))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .child(
+                                                    div()
+                                                        .text_color(rgb(0x697783))
+                                                        .child(self.submission_detail()),
+                                                )
+                                                .child(
+                                                    Button::new("prepare-diagnosis")
+                                                        .label("运行调查  →")
+                                                        .primary()
+                                                        .loading(self.is_busy())
+                                                        .disabled(
+                                                            !self.backend_is_ready()
+                                                                || self.is_busy()
+                                                                || self
+                                                                    .waiting_for_user_input()
+                                                                    .is_some()
+                                                                || self
+                                                                    .waiting_for_approval()
+                                                                    .is_some()
+                                                                || self
+                                                                    .approval_is_recorded()
+                                                                    .is_some(),
+                                                        )
+                                                        .on_click(
+                                                            cx.listener(Self::submit_diagnosis),
+                                                        ),
+                                                ),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap(px(12.0))
+                                        .child(panel("服务状态", &self.connection_detail()))
+                                        .child(panel("分析进度", &self.run_detail())),
+                                )
+                                .when_some(
+                                    self.waiting_for_user_input()
+                                        .map(|(_, question)| question.to_owned()),
+                                    |this, question| {
+                                        this.child(
+                                            intervention_panel("需要补充信息", question)
+                                                .child(Input::new(&self.operator_input).h(px(86.0)))
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .child(
+                                                            div().text_color(rgb(0x697783)).child(
+                                                                self.operator_submission_detail(),
                                                             ),
+                                                        )
+                                                        .child(
+                                                            Button::new("resume-with-user-input")
+                                                                .label("提交并继续  →")
+                                                                .primary()
+                                                                .loading(self.is_busy())
+                                                                .disabled(
+                                                                    !self.backend_is_ready()
+                                                                        || self.is_busy(),
+                                                                )
+                                                                .on_click(cx.listener(
+                                                                    Self::submit_user_input,
+                                                                )),
+                                                        ),
+                                                ),
+                                        )
+                                    },
+                                )
+                                .when_some(
+                                    self.waiting_for_approval().map(|(_, tool_name, reason)| {
+                                        (tool_name.to_owned(), reason.to_owned())
+                                    }),
+                                    |this, (_tool_name, reason)| {
+                                        this.child(
+                                            intervention_panel("请确认操作", reason)
+                                                .child(
+                                                    div().child(
+                                                        "系统需要执行一项可能影响服务的操作。",
                                                     ),
-                                            ),
-                                    )
-                                },
-                            )
-                            .when_some(
-                                self.waiting_for_approval().map(|(_, tool_name, reason)| {
-                                    (tool_name.to_owned(), reason.to_owned())
-                                }),
-                                |this, (tool_name, reason)| {
-                                    this.child(
-                                        intervention_panel("HIGH-RISK ACTION REVIEW", reason)
-                                            .child(div().child(format!("工具：{tool_name}")))
-                                            .child(Input::new(&self.approval_input).h(px(70.0)))
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_between()
-                                                    .child(
-                                                        div()
-                                                            .text_color(rgb(0x9eaaa0))
-                                                            .child(self.approval_submission_detail()),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .flex()
-                                                            .gap(px(8.0))
-                                                            .child(
-                                                                Button::new("reject-approval")
-                                                                    .label("拒绝动作")
-                                                                    .disabled(
-                                                                        !self.backend_is_ready()
-                                                                            || self.is_busy(),
-                                                                    )
-                                                                    .on_click(
-                                                                        cx.listener(Self::reject_run),
-                                                                    ),
-                                                            )
-                                                            .child(
-                                                                Button::new("approve-approval")
-                                                                    .label("记录批准")
-                                                                    .primary()
-                                                                    .loading(self.is_busy())
-                                                                    .disabled(
-                                                                        !self.backend_is_ready()
-                                                                            || self.is_busy(),
-                                                                    )
-                                                                    .on_click(
-                                                                        cx.listener(Self::approve_run),
-                                                                    ),
+                                                )
+                                                .child(Input::new(&self.approval_input).h(px(70.0)))
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .child(
+                                                            div().text_color(rgb(0x697783)).child(
+                                                                self.approval_submission_detail(),
                                                             ),
-                                                    ),
-                                            ),
-                                    )
-                                },
-                            )
-                            .when_some(
-                                self.approval_is_recorded()
-                                    .map(|(_, tool_name)| tool_name.to_owned()),
-                                |this, tool_name| {
-                                    this.child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .p(px(16.0))
-                                            .rounded(px(10.0))
-                                            .bg(rgb(0x18261d))
-                                            .border_1()
-                                            .border_color(rgb(0x5b7653))
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .gap(px(4.0))
-                                                    .child(
-                                                        div()
-                                                            .text_color(rgb(0xd6f36a))
-                                                            .child("APPROVAL RECORDED"),
-                                                    )
-                                                    .child(div().child(format!(
-                                                        "已批准 {tool_name}；需要再次确认才会继续运行。"
-                                                    ))),
-                                            )
-                                            .child(
-                                                Button::new("resume-approved-run")
-                                                    .label("确认并继续")
-                                                    .primary()
-                                                    .loading(self.is_busy())
-                                                    .disabled(
-                                                        !self.backend_is_ready() || self.is_busy(),
-                                                    )
-                                                    .on_click(cx.listener(Self::resume_approved_run)),
-                                            ),
-                                    )
-                                },
-                            )
-                            .when_some(self.final_answer().map(str::to_owned), |this, answer| {
-                                this.child(report_panel(&answer))
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .gap(px(8.0))
+                                                                .child(
+                                                                    Button::new("reject-approval")
+                                                                        .label("拒绝动作")
+                                                                        .disabled(
+                                                                            !self
+                                                                                .backend_is_ready()
+                                                                                || self.is_busy(),
+                                                                        )
+                                                                        .on_click(cx.listener(
+                                                                            Self::reject_run,
+                                                                        )),
+                                                                )
+                                                                .child(
+                                                                    Button::new("approve-approval")
+                                                                        .label("记录批准")
+                                                                        .primary()
+                                                                        .loading(self.is_busy())
+                                                                        .disabled(
+                                                                            !self
+                                                                                .backend_is_ready()
+                                                                                || self.is_busy(),
+                                                                        )
+                                                                        .on_click(cx.listener(
+                                                                            Self::approve_run,
+                                                                        )),
+                                                                ),
+                                                        ),
+                                                ),
+                                        )
+                                    },
+                                )
+                                .when_some(
+                                    self.approval_is_recorded()
+                                        .map(|(_, tool_name)| tool_name.to_owned()),
+                                    |this, _tool_name| {
+                                        this.child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .p(px(16.0))
+                                                .rounded(px(10.0))
+                                                .bg(rgb(0x18261d))
+                                                .border_1()
+                                                .border_color(rgb(0x5b7653))
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .flex_col()
+                                                        .gap(px(4.0))
+                                                        .child(
+                                                            div()
+                                                                .text_color(rgb(0x4f829c))
+                                                                .child("已完成确认"),
+                                                        )
+                                                        .child(
+                                                            div().child("再次确认后将继续分析。"),
+                                                        ),
+                                                )
+                                                .child(
+                                                    Button::new("resume-approved-run")
+                                                        .label("确认并继续")
+                                                        .primary()
+                                                        .loading(self.is_busy())
+                                                        .disabled(
+                                                            !self.backend_is_ready()
+                                                                || self.is_busy(),
+                                                        )
+                                                        .on_click(
+                                                            cx.listener(Self::resume_approved_run),
+                                                        ),
+                                                ),
+                                        )
+                                    },
+                                )
+                                .when_some(
+                                    self.final_answer().map(str::to_owned),
+                                    |this, answer| this.child(report_panel(&answer)),
+                                )
+                            })
+                            .when(self.page == WorkspacePage::Knowledge, |this| {
+                                this.child(workspace_empty_state(
+                                    "知识库正在准备中",
+                                    "完成知识库导入后，相关说明会显示在这里。",
+                                ))
+                            })
+                            .when(self.page == WorkspacePage::History, |this| {
+                                this.child(workspace_empty_state(
+                                    "暂无历史记录",
+                                    "完成一次诊断后，记录会显示在这里。",
+                                ))
                             }),
                     )
                     .child(trajectory_panel(&self.run_detail(), &self.trajectory)),
@@ -1145,30 +1226,47 @@ impl Render for OpsMindConsole {
     }
 }
 
-fn workbench_sidebar(catalog_detail: &str) -> impl IntoElement {
+fn workbench_sidebar(
+    catalog_detail: &str,
+    page: WorkspacePage,
+    cx: &mut Context<OpsMindConsole>,
+) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
         .w(px(220.0))
         .p(px(14.0))
         .gap(px(18.0))
-        .bg(rgb(0x12171c))
+        .bg(rgba(0xffffff8f))
         .border_r_1()
-        .border_color(rgb(0x2a333d))
+        .border_color(rgba(0xffffffb8))
         .child(
             div()
                 .text_size(px(10.0))
-                .text_color(rgb(0x718077))
-                .child("WORKSPACE"),
+                .text_color(rgb(0x75818d))
+                .child("工作区"),
         )
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
-                .child(workbench_nav_item("▣  Investigations", true))
-                .child(workbench_nav_item("◇  Knowledge base", false))
-                .child(workbench_nav_item("◌  Run archive", false)),
+                .child(
+                    workbench_nav_item(
+                        "nav-investigation",
+                        "诊断",
+                        page == WorkspacePage::Investigation,
+                    )
+                    .on_click(cx.listener(OpsMindConsole::show_investigation)),
+                )
+                .child(
+                    workbench_nav_item("nav-knowledge", "知识库", page == WorkspacePage::Knowledge)
+                        .on_click(cx.listener(OpsMindConsole::show_knowledge)),
+                )
+                .child(
+                    workbench_nav_item("nav-history", "历史记录", page == WorkspacePage::History)
+                        .on_click(cx.listener(OpsMindConsole::show_history)),
+                ),
         )
         .child(
             div()
@@ -1178,18 +1276,18 @@ fn workbench_sidebar(catalog_detail: &str) -> impl IntoElement {
                 .child(
                     div()
                         .text_size(px(10.0))
-                        .text_color(rgb(0x718077))
-                        .child("SCENARIO CATALOG"),
+                        .text_color(rgb(0x75818d))
+                        .child("可选场景"),
                 )
                 .child(
                     div()
                         .p(px(12.0))
                         .rounded(px(8.0))
-                        .bg(rgb(0x19211f))
+                        .bg(rgba(0xffffff7a))
                         .border_1()
-                        .border_color(rgb(0x2f3d36))
+                        .border_color(rgba(0xffffffb8))
                         .text_size(px(12.0))
-                        .text_color(rgb(0xb7c5bb))
+                        .text_color(rgb(0x5c6975))
                         .child(catalog_detail.to_owned()),
                 ),
         )
@@ -1201,33 +1299,59 @@ fn workbench_sidebar(catalog_detail: &str) -> impl IntoElement {
                 .gap(px(6.0))
                 .p(px(12.0))
                 .rounded(px(8.0))
-                .bg(rgb(0x171d22))
+                .bg(rgba(0xffffff75))
                 .border_1()
-                .border_color(rgb(0x2a333d))
+                .border_color(rgba(0xffffffb8))
                 .child(
                     div()
                         .text_size(px(10.0))
-                        .text_color(rgb(0xd6f36a))
-                        .child("HARNESS MODE"),
+                        .text_color(rgb(0x5a8da7))
+                        .child("使用提示"),
                 )
                 .child(
                     div()
                         .text_size(px(11.0))
-                        .text_color(rgb(0x9eaaa0))
-                        .child("Plan · tools · evidence · verification"),
+                        .text_color(rgb(0x667480))
+                        .child("描述问题现象，系统会协助你完成分析。"),
                 ),
         )
 }
 
-fn workbench_nav_item(label: &'static str, active: bool) -> impl IntoElement {
+fn workbench_nav_item(
+    id: &'static str,
+    label: &'static str,
+    active: bool,
+) -> gpui::Stateful<gpui::Div> {
     div()
+        .id(id)
         .px(px(10.0))
         .py(px(8.0))
         .rounded(px(7.0))
-        .bg(if active { rgb(0x243126) } else { rgb(0x12171c) })
-        .text_color(if active { rgb(0xd6f36a) } else { rgb(0xa1ada5) })
+        .bg(if active {
+            rgba(0xffffffb8)
+        } else {
+            rgba(0xffffff00)
+        })
+        .text_color(if active { rgb(0x356f8a) } else { rgb(0x687783) })
         .text_size(px(12.0))
+        .cursor_pointer()
+        .hover(|this| this.bg(rgba(0xffffff8f)))
         .child(label)
+}
+
+fn workspace_empty_state(title: &'static str, detail: &'static str) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .p(px(32.0))
+        .gap(px(10.0))
+        .rounded(px(14.0))
+        .bg(rgba(0xffffff8f))
+        .border_1()
+        .border_color(rgba(0xffffffb8))
+        .child(div().text_xl().text_color(rgb(0x4f829c)).child(title))
+        .child(div().text_color(rgb(0x697783)).child(detail))
 }
 
 fn panel(title: &'static str, detail: &str) -> impl IntoElement {
@@ -1238,13 +1362,13 @@ fn panel(title: &'static str, detail: &str) -> impl IntoElement {
         .p(px(16.0))
         .gap(px(8.0))
         .rounded(px(12.0))
-        .bg(rgb(0x131916))
+        .bg(rgba(0xffffff8f))
         .border_1()
-        .border_color(rgb(0x2e3933))
+        .border_color(rgba(0xffffffb8))
         .child(
             div()
                 .text_size(px(10.0))
-                .text_color(rgb(0xd6f36a))
+                .text_color(rgb(0x5a8da7))
                 .child(title),
         )
         .child(div().text_size(px(13.0)).child(detail.to_owned()))
@@ -1254,26 +1378,26 @@ fn trajectory_panel(detail: &str, entries: &[String]) -> impl IntoElement {
     let mut panel = div()
         .flex()
         .flex_col()
-        .w(px(330.0))
+        .w(px(300.0))
         .p(px(20.0))
         .gap(px(10.0))
         .rounded(px(14.0))
-        .bg(rgb(0x151c18))
+        .bg(rgba(0xffffff8f))
         .border_1()
-        .border_color(rgb(0x344039))
+        .border_color(rgba(0xffffffb8))
         .child(
             div()
                 .text_size(px(11.0))
-                .text_color(rgb(0xd6f36a))
-                .child("LIVE TRAJECTORY"),
+                .text_color(rgb(0x5a8da7))
+                .child("分析进展"),
         )
-        .child(div().text_color(rgb(0x9eaaa0)).child(detail.to_owned()));
+        .child(div().text_color(rgb(0x697783)).child(detail.to_owned()));
 
     if entries.is_empty() {
         panel = panel.child(
             div()
-                .text_color(rgb(0x718077))
-                .child("等待首个安全轨迹事件。"),
+                .text_color(rgb(0x7b8994))
+                .child("开始分析后，这里会显示进展。"),
         );
     } else {
         for entry in entries.iter().rev().take(3).rev() {
@@ -1281,7 +1405,7 @@ fn trajectory_panel(detail: &str, entries: &[String]) -> impl IntoElement {
                 div()
                     .p(px(10.0))
                     .rounded(px(8.0))
-                    .bg(rgb(0x1d2921))
+                    .bg(rgba(0xffffffa3))
                     .text_size(px(12.0))
                     .child(entry.clone()),
             );
@@ -1297,10 +1421,10 @@ fn report_panel(answer: &str) -> impl IntoElement {
         .p(px(20.0))
         .gap(px(8.0))
         .rounded(px(14.0))
-        .bg(rgb(0x17241c))
+        .bg(rgba(0xffffffa3))
         .border_1()
-        .border_color(rgb(0x5b7653))
-        .child(div().text_color(rgb(0xd6f36a)).child("DIAGNOSIS REPORT"));
+        .border_color(rgba(0xffffffd1))
+        .child(div().text_color(rgb(0x4f829c)).child("分析结论"));
 
     for line in answer.lines().filter(|line| !line.trim().is_empty()) {
         panel = panel.child(div().text_size(px(13.0)).child(line.to_owned()));
@@ -1315,23 +1439,23 @@ fn intervention_panel(title: &'static str, detail: String) -> gpui::Div {
         .p(px(20.0))
         .gap(px(12.0))
         .rounded(px(14.0))
-        .bg(rgb(0x261d16))
+        .bg(rgba(0xfff3e5c7))
         .border_1()
-        .border_color(rgb(0x9b6d39))
+        .border_color(rgb(0xe8c18d))
         .child(
             div()
                 .text_size(px(11.0))
-                .text_color(rgb(0xffbd62))
+                .text_color(rgb(0xa56d2c))
                 .child(title),
         )
-        .child(div().text_color(rgb(0xe4d0ba)).child(detail))
+        .child(div().text_color(rgb(0x75592f)).child(detail))
 }
 
 fn connection_color(connection: &ConnectionState) -> gpui::Hsla {
     match connection {
-        ConnectionState::Ready { .. } => rgb(0xd6f36a).into(),
-        ConnectionState::Checking => rgb(0xffbd62).into(),
-        ConnectionState::Unavailable => rgb(0xff8264).into(),
+        ConnectionState::Ready => rgb(0x5a8da7).into(),
+        ConnectionState::Checking => rgb(0xc7954b).into(),
+        ConnectionState::Unavailable => rgb(0xc76a62).into(),
     }
 }
 
@@ -1389,7 +1513,7 @@ mod tests {
         )
         .expect("safe trajectory event");
 
-        assert_eq!(entry, "#4 · tool_finished · query_metrics · 18 ms");
+        assert_eq!(entry, "步骤 4 · 收集证据 · 耗时 18 ms");
         assert!(!entry.contains("secret"));
     }
 
