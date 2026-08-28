@@ -14,7 +14,7 @@ use gpui::{
     Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 use gpui_component::{
-    Disableable as _,
+    Disableable as _, Root,
     button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
 };
@@ -1105,7 +1105,10 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| OpsMindConsole::new(window, cx)),
+            |window, cx| {
+                let view = cx.new(|cx| OpsMindConsole::new(window, cx));
+                cx.new(|cx| Root::new(view, window, cx))
+            },
         )
         .expect("failed to open OpsMind desktop window");
     });
