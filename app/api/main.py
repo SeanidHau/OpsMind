@@ -1,5 +1,8 @@
 """FastAPI 应用工厂与 ASGI 入口。"""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from app.api.middleware import RequestContextMiddleware
@@ -13,10 +16,18 @@ from app.diagnosis.providers import create_action_provider
 from app.diagnosis.runner import DiagnosisRunner
 from app.diagnosis.runtime import create_harness_diagnosis_runner
 from app.harness.loop import ActionProvider
+from app.harness.snapshot import InMemoryRunArchive, PostgresRunArchive, RunArchive
 from app.observability.logging import configure_logging
 from app.scenarios.defaults import create_default_scenario_store
 from app.tools.registry import ToolRegistry
 from app.tools.scenarios import ScenarioStore, register_scenario_tools
+
+
+def create_run_archive(settings: Settings) -> RunArchive:
+    """按配置选择内存或 PostgreSQL 运行快照归档。"""
+    if settings.run_archive_backend == "postgres":
+        return PostgresRunArchive(str(settings.database_url))
+    return InMemoryRunArchive()
 
 
 def create_app(
@@ -25,6 +36,7 @@ def create_app(
     scenario_store: ScenarioStore | None = None,
     diagnosis_runner: DiagnosisRunner | None = None,
     action_provider: ActionProvider | None = None,
+    run_archive: RunArchive | None = None,
 ) -> FastAPI:
     """创建应用实例，并注入可替换的配置供后续依赖使用。"""
     if diagnosis_runner is not None and action_provider is not None:
@@ -34,6 +46,17 @@ def create_app(
     configure_logging(log_level=resolved_settings.log_level)
 
     resolved_action_provider = action_provider or create_action_provider(resolved_settings)
+    resolved_run_archive = run_archive or create_run_archive(resolved_settings)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if isinstance(resolved_run_archive, PostgresRunArchive):
+            await resolved_run_archive.initialize()
+        try:
+            yield
+        finally:
+            if isinstance(resolved_run_archive, PostgresRunArchive):
+                await resolved_run_archive.close()
 
     app = FastAPI(
         title="OpsMind API",
@@ -43,10 +66,12 @@ def create_app(
         debug=resolved_settings.app_env is AppEnvironment.DEVELOPMENT,
         # Redoc 暂不启用，后续接口较多时再评估是否保留。
         redoc_url=None,
+        lifespan=lifespan,
     )
 
     # 保存解析后的配置；路由层不应自行读取环境变量。
     app.state.settings = resolved_settings
+    app.state.run_archive = resolved_run_archive
 
     app.state.scenario_store = scenario_store or create_default_scenario_store()
 
@@ -58,6 +83,7 @@ def create_app(
         create_harness_diagnosis_runner(
             action_provider=resolved_action_provider,
             tool_registry=tool_registry,
+            run_archive=resolved_run_archive,
         )
         if resolved_action_provider is not None
         else None

@@ -175,11 +175,11 @@ class UnusedToolExecutor:
         raise AssertionError("restore_checkpoint must not call the tool executor")
 
 
-def test_loop_restores_archived_checkpoint_without_running_graph() -> None:
+async def test_loop_restores_archived_checkpoint_without_running_graph() -> None:
     """Loop 入口应只读取归档并返回强类型状态。"""
     snapshot = populated_snapshot()
     archive = InMemoryRunArchive()
-    archive.save(snapshot)
+    await archive.save(snapshot)
     loop = HarnessLoop(
         action_provider=UnusedActionProvider(),
         tool_executor=UnusedToolExecutor(),
@@ -187,7 +187,7 @@ def test_loop_restores_archived_checkpoint_without_running_graph() -> None:
         run_archive=archive,
     )
 
-    restored = loop.restore_checkpoint(snapshot.run_id)
+    restored = await loop.restore_checkpoint(snapshot.run_id)
 
     assert restored["run_id"] == str(snapshot.run_id)
     assert restored["trajectory"][0].event_type is EventType.RUN_PAUSED

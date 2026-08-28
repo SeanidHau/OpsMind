@@ -123,7 +123,7 @@ async def test_approved_checkpoint_executes_original_action_without_reproposal()
     assert provider.calls == 1
     assert executor.actions == []
 
-    resolved = loop.resolve_approval(
+    resolved = await loop.resolve_approval(
         run_id=run_id,
         command=ApprovalCommand(
             decision=ApprovalDecision.APPROVE,
@@ -148,7 +148,7 @@ async def test_approved_checkpoint_executes_original_action_without_reproposal()
     assert result["trajectory"][-2].event_type is EventType.RUN_COMPLETED
     assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
 
-    persisted = archive.load(run_id)
+    persisted = await archive.load(run_id)
     assert persisted.terminal_status is HarnessStatus.COMPLETED
     assert persisted.trajectory[-1].event_type is EventType.CHECKPOINT_SAVED
 
@@ -169,7 +169,7 @@ async def test_edited_checkpoint_executes_edited_action_without_reproposal() -> 
 
     waiting = await loop.run(make_state())  # type: ignore[arg-type]
     run_id = UUID(waiting["run_id"])
-    resolved = loop.resolve_approval(
+    resolved = await loop.resolve_approval(
         run_id=run_id,
         command=ApprovalCommand(
             decision=ApprovalDecision.EDIT,
@@ -180,7 +180,7 @@ async def test_edited_checkpoint_executes_edited_action_without_reproposal() -> 
 
     assert resolved["current_action"] == edited_action
     assert resolved["approval_resolution"].decision is ApprovalDecision.EDIT
-    restored = loop.restore_checkpoint(run_id)
+    restored = await loop.restore_checkpoint(run_id)
     assert restored["current_action"] == edited_action
     assert restored["approval_resolution"].action == edited_action
 
@@ -203,7 +203,7 @@ async def test_rejected_checkpoint_cannot_resume() -> None:
 
     waiting = await loop.run(make_state())  # type: ignore[arg-type]
     run_id = UUID(waiting["run_id"])
-    rejected = loop.resolve_approval(
+    rejected = await loop.resolve_approval(
         run_id=run_id,
         command=ApprovalCommand(
             decision=ApprovalDecision.REJECT,
@@ -229,11 +229,11 @@ async def test_approved_checkpoint_blocks_when_budget_changed() -> None:
 
     waiting = await loop.run(make_state(max_steps=1))  # type: ignore[arg-type]
     run_id = UUID(waiting["run_id"])
-    snapshot = archive.load(run_id)
+    snapshot = await archive.load(run_id)
     snapshot.final_state["budget"]["used_steps"] = 1
-    archive.replace(snapshot)
+    await archive.replace(snapshot)
 
-    loop.resolve_approval(
+    await loop.resolve_approval(
         run_id=run_id,
         command=ApprovalCommand(
             decision=ApprovalDecision.APPROVE,

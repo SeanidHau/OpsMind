@@ -26,7 +26,7 @@ class DiagnosisRunner(Protocol):
 class DiagnosisRunReader(Protocol):
     """读取已归档诊断运行的最小接口。"""
 
-    def get_run(self, run_id: UUID) -> ReplayResult:
+    async def get_run(self, run_id: UUID) -> ReplayResult:
         """返回缓存快照，不重新执行模型、工具或图节点。"""
 
 
@@ -55,7 +55,7 @@ class StreamingDiagnosisRunner(Protocol):
 class DiagnosisApprovalResolver(Protocol):
     """记录等待审批运行的人工决议。"""
 
-    def resolve_approval(self, *, run_id: UUID, command: ApprovalCommand) -> DiagnosisState:
+    async def resolve_approval(self, *, run_id: UUID, command: ApprovalCommand) -> DiagnosisState:
         """保存决议，但不在本步骤执行获批动作。"""
 
 
@@ -123,17 +123,17 @@ class HarnessDiagnosisRunner:
         )
         return await self._harness_loop.run(initial_state, event_observer=event_observer)
 
-    def get_run(self, run_id: UUID) -> ReplayResult:
+    async def get_run(self, run_id: UUID) -> ReplayResult:
         """读取 Harness 缓存的运行快照，不触发新的诊断执行。"""
-        return self._harness_loop.replay_cached(run_id)
+        return await self._harness_loop.replay_cached(run_id)
 
     async def resume_with_user_input(self, run_id: UUID, answer: str) -> DiagnosisState:
         """将用户回答交给 Harness，从等待输入 checkpoint 续跑。"""
         return await self._harness_loop.resume_with_user_input(run_id, answer)
 
-    def resolve_approval(self, *, run_id: UUID, command: ApprovalCommand) -> DiagnosisState:
+    async def resolve_approval(self, *, run_id: UUID, command: ApprovalCommand) -> DiagnosisState:
         """记录审批决议，不在决议步骤执行工具。"""
-        return self._harness_loop.resolve_approval(run_id=run_id, command=command)
+        return await self._harness_loop.resolve_approval(run_id=run_id, command=command)
 
     async def resume_approved(self, run_id: UUID) -> DiagnosisState:
         """从已批准 checkpoint 执行原始或编辑后的工具动作。"""

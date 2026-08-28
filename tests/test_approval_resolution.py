@@ -226,12 +226,12 @@ class UnusedToolExecutor:
         raise AssertionError("resolve_approval must not execute tools")
 
 
-def test_loop_resolves_archived_approval_without_running_graph() -> None:
+async def test_loop_resolves_archived_approval_without_running_graph() -> None:
     """Loop 入口应从 checkpoint 读取状态并仅写入决议。"""
     state = waiting_state()
     archive = InMemoryRunArchive()
     snapshot = RunSnapshotFactory().build(state)  # type: ignore[arg-type]
-    archive.save(snapshot)
+    await archive.save(snapshot)
     loop = HarnessLoop(
         action_provider=UnusedActionProvider(),
         tool_executor=UnusedToolExecutor(),
@@ -239,7 +239,7 @@ def test_loop_resolves_archived_approval_without_running_graph() -> None:
         run_archive=archive,
     )
 
-    resolved = loop.resolve_approval(
+    resolved = await loop.resolve_approval(
         run_id=snapshot.run_id,
         command=ApprovalCommand(
             decision=ApprovalDecision.APPROVE,
@@ -250,5 +250,5 @@ def test_loop_resolves_archived_approval_without_running_graph() -> None:
     assert resolved["terminal_status"] is None
     assert resolved["trajectory"][-2].event_type is EventType.RUN_RESUMED
     assert resolved["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
-    persisted = archive.load(snapshot.run_id)
+    persisted = await archive.load(snapshot.run_id)
     assert persisted.trajectory[-1].event_type is EventType.CHECKPOINT_SAVED

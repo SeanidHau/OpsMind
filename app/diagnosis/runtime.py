@@ -3,6 +3,7 @@
 from app.diagnosis.runner import HarnessDiagnosisRunner
 from app.harness.loop import ActionProvider, HarnessLoop
 from app.harness.policy import ActionPolicy
+from app.harness.snapshot import RunArchive
 from app.models.contracts import BudgetState
 from app.tools.registry import ToolRegistry
 
@@ -24,12 +25,14 @@ def create_harness_diagnosis_runner(
     action_provider: ActionProvider,
     tool_registry: ToolRegistry,
     budget_template: BudgetState | None = None,
+    run_archive: RunArchive | None = None,
 ) -> HarnessDiagnosisRunner:
     """将动作提供器、受控工具和策略装配为可运行的诊断服务。"""
     harness_loop = HarnessLoop(
         action_provider=action_provider,
         tool_executor=tool_registry,
         policy=ActionPolicy(tool_registry.policies()),
+        run_archive=run_archive,
     )
     return HarnessDiagnosisRunner(
         harness_loop=harness_loop,

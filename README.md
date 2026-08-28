@@ -4,9 +4,9 @@ OpsMind 是一个面向长流程任务的 Agent Harness 项目，使用运维故
 
 ## 当前阶段
 
-已完成受控 Harness、RAG 与模拟工具、用户输入续跑、高风险动作审批、运行回放、实时 SSE 和 GPUI 桌面工作台。
+已完成受控 Harness、RAG 与模拟工具、用户输入续跑、高风险动作审批、运行回放、实时 SSE、GPUI 桌面工作台和可选 PostgreSQL 运行归档。
 
-当前运行归档使用进程内存。服务重启后，已归档运行不可读取或回放。PostgreSQL 持久化尚未接入运行归档链路。
+默认运行归档使用进程内存，服务重启后历史运行不可读取或回放。将 `RUN_ARCHIVE_BACKEND` 设为 `postgres` 后，应用在启动时创建 `run_snapshots` 表，并将快照写入 PostgreSQL。
 
 ## 技术栈
 
@@ -38,11 +38,23 @@ OpsMind 是一个面向长流程任务的 Agent Harness 项目，使用运维故
 
 3. 可选：启动 PostgreSQL 和 Qdrant。
 
-   默认的模拟场景诊断不依赖这两个服务。需要验证本地基础设施配置时，运行：
+   默认的模拟场景诊断不依赖这两个服务。设置 `RUN_ARCHIVE_BACKEND=postgres` 前，先启动 PostgreSQL。需要验证本地基础设施配置时，运行：
 
    ```bash
    docker compose up -d
    ```
+
+### 保存运行记录到 PostgreSQL
+
+在 `.env` 中设置：
+
+```dotenv
+RUN_ARCHIVE_BACKEND=postgres
+```
+
+启动 FastAPI 时，应用自动创建 `run_snapshots` 表。之后创建、等待输入、记录审批和续跑都会替换同一运行的最新快照；服务重启后可继续查询、回放或恢复该运行。
+
+未启动 PostgreSQL 时，不要设置 `RUN_ARCHIVE_BACKEND=postgres`。应用启动会失败，以避免将配置错误静默降级为内存归档。
 
 4. 运行项目验收。
 

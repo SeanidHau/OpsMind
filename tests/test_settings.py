@@ -3,8 +3,9 @@
 import pytest
 from pydantic import ValidationError
 
-from app.api.main import create_app
+from app.api.main import create_app, create_run_archive
 from app.config import AppEnvironment, Settings, get_settings
+from app.harness.snapshot import InMemoryRunArchive, PostgresRunArchive
 
 
 def make_settings(**overrides: object) -> Settings:
@@ -62,3 +63,12 @@ def test_app_factory_uses_injected_settings_and_disables_production_debug() -> N
 
     assert app.state.settings is settings
     assert app.debug is False
+
+
+def test_run_archive_backend_uses_explicit_configuration() -> None:
+    """默认归档不依赖数据库；显式配置时才创建 PostgreSQL 归档。"""
+    assert isinstance(create_run_archive(make_settings()), InMemoryRunArchive)
+    assert isinstance(
+        create_run_archive(make_settings(run_archive_backend="postgres")),
+        PostgresRunArchive,
+    )

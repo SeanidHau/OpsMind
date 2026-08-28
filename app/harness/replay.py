@@ -16,9 +16,9 @@ class CachedReplayService:
         """注入快照归档，便于后续替换为数据库实现。"""
         self._archive = archive
 
-    def replay(self, run_id: UUID) -> ReplayResult:
+    async def replay(self, run_id: UUID) -> ReplayResult:
         """返回独立副本，避免回放调用方修改归档内容。"""
-        snapshot = self._archive.load(run_id)
+        snapshot = await self._archive.load(run_id)
 
         return ReplayResult(
             source_run_id=snapshot.run_id,

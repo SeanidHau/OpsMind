@@ -36,24 +36,24 @@ def make_state() -> dict[str, object]:
     )
 
 
-def test_cached_replay_returns_independent_historical_copy() -> None:
+async def test_cached_replay_returns_independent_historical_copy() -> None:
     """回放必须复用历史状态，但不得让调用方修改归档。"""
     archive = InMemoryRunArchive()
     snapshot = RunSnapshotFactory().build(make_state())  # type: ignore[arg-type]
-    archive.save(snapshot)
+    await archive.save(snapshot)
 
-    replay = CachedReplayService(archive).replay(snapshot.run_id)
+    replay = await CachedReplayService(archive).replay(snapshot.run_id)
     replay.final_state["user_query"] = "回放调用方修改"
 
     assert replay.source_run_id == snapshot.run_id
     assert replay.mode is ReplayMode.CACHED
-    assert archive.load(snapshot.run_id).final_state["user_query"] == "支付服务请求超时"
+    assert (await archive.load(snapshot.run_id)).final_state["user_query"] == "支付服务请求超时"
 
 
-def test_cached_replay_rejects_unknown_run() -> None:
+async def test_cached_replay_rejects_unknown_run() -> None:
     """不存在的运行 ID 必须明确失败，不能伪造空回放。"""
     with pytest.raises(KeyError, match="snapshot not found"):
-        CachedReplayService(InMemoryRunArchive()).replay(uuid4())
+        await CachedReplayService(InMemoryRunArchive()).replay(uuid4())
 
 
 class CountingActionProvider:
@@ -99,7 +99,7 @@ async def test_loop_replay_cached_does_not_reinvoke_model_or_tools() -> None:
     )
 
     result = await loop.run(make_state())  # type: ignore[arg-type]
-    replay = loop.replay_cached(UUID(result["run_id"]))
+    replay = await loop.replay_cached(UUID(result["run_id"]))
 
     assert result["terminal_status"] is HarnessStatus.BLOCKED
     assert provider.calls == 1

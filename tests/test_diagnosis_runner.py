@@ -27,7 +27,7 @@ class RecordingHarnessLoop:
         self.resume_calls.append((run_id, answer))
         return self.states[0]
 
-    def resolve_approval(self, *, run_id: UUID, command: ApprovalCommand) -> DiagnosisState:
+    async def resolve_approval(self, *, run_id: UUID, command: ApprovalCommand) -> DiagnosisState:
         """记录审批决议，并返回保存状态。"""
         self.approval_calls.append((run_id, command))
         return self.states[0]
@@ -96,7 +96,7 @@ async def test_harness_runner_keeps_approval_and_execution_separate() -> None:
     run_id = UUID(state["run_id"])
     command = ApprovalCommand(decision=ApprovalDecision.APPROVE, reason="维护窗口已确认。")
 
-    resolved = runner.resolve_approval(run_id=run_id, command=command)
+    resolved = await runner.resolve_approval(run_id=run_id, command=command)
 
     assert resolved is state
     assert harness_loop.approval_calls == [(run_id, command)]

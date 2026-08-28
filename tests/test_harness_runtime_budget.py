@@ -135,7 +135,7 @@ async def test_runtime_budget_exhaustion_blocks_and_archives_latest_state() -> N
     assert result["trajectory"][-2].event_type is EventType.ACTION_BLOCKED
     assert result["trajectory"][-2].node == "runtime_budget"
     assert result["trajectory"][-1].event_type is EventType.CHECKPOINT_SAVED
-    assert archive.load(run_id).terminal_status is HarnessStatus.BLOCKED
+    assert (await archive.load(run_id)).terminal_status is HarnessStatus.BLOCKED
 
 
 @pytest.mark.asyncio
@@ -162,7 +162,7 @@ async def test_approved_resume_accumulates_runtime_budget() -> None:
     assert waiting["terminal_status"] is HarnessStatus.WAITING_APPROVAL
     assert waiting["budget"].used_runtime_seconds == 1
 
-    loop.resolve_approval(
+    await loop.resolve_approval(
         run_id=run_id,
         command=ApprovalCommand(
             decision=ApprovalDecision.APPROVE,
@@ -173,4 +173,4 @@ async def test_approved_resume_accumulates_runtime_budget() -> None:
 
     assert result["terminal_status"] is HarnessStatus.COMPLETED
     assert result["budget"].used_runtime_seconds == 2
-    assert archive.load(run_id).final_state["budget"]["used_runtime_seconds"] == 2
+    assert (await archive.load(run_id)).final_state["budget"]["used_runtime_seconds"] == 2

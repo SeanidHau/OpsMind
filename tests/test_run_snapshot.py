@@ -48,37 +48,37 @@ def test_snapshot_factory_serializes_state_without_duplicate_trajectory() -> Non
     assert snapshot.trajectory == []
 
 
-def test_archive_rejects_duplicate_and_isolates_nested_mutation() -> None:
+async def test_archive_rejects_duplicate_and_isolates_nested_mutation() -> None:
     """归档内的快照不能被保存方或读取方的嵌套修改污染。"""
     snapshot = RunSnapshotFactory().build(make_state())  # type: ignore[arg-type]
     archive = InMemoryRunArchive()
-    archive.save(snapshot)
+    await archive.save(snapshot)
 
     snapshot.final_state["user_query"] = "已被外部修改"
-    loaded = archive.load(snapshot.run_id)
+    loaded = await archive.load(snapshot.run_id)
     loaded.final_state["user_query"] = "已被读取方修改"
 
-    assert archive.load(snapshot.run_id).final_state["user_query"] == "支付服务请求超时"
+    assert (await archive.load(snapshot.run_id)).final_state["user_query"] == "支付服务请求超时"
     with pytest.raises(ValueError, match="snapshot already exists"):
-        archive.save(snapshot)
+        await archive.save(snapshot)
     with pytest.raises(KeyError, match="snapshot not found"):
-        archive.load(uuid4())
+        await archive.load(uuid4())
 
 
-def test_archive_replaces_existing_snapshot_and_rejects_unknown_run() -> None:
+async def test_archive_replaces_existing_snapshot_and_rejects_unknown_run() -> None:
     """替换只允许覆盖已有运行，且继续保持快照隔离。"""
     archive = InMemoryRunArchive()
     snapshot = RunSnapshotFactory().build(make_state())  # type: ignore[arg-type]
-    archive.save(snapshot)
+    await archive.save(snapshot)
 
-    replacement = archive.load(snapshot.run_id)
+    replacement = await archive.load(snapshot.run_id)
     replacement.final_state["user_query"] = "审批决议已写入"
-    archive.replace(replacement)
+    await archive.replace(replacement)
     replacement.final_state["user_query"] = "调用方后续修改"
 
-    assert archive.load(snapshot.run_id).final_state["user_query"] == "审批决议已写入"
+    assert (await archive.load(snapshot.run_id)).final_state["user_query"] == "审批决议已写入"
     with pytest.raises(KeyError, match="snapshot not found"):
-        archive.replace(RunSnapshotFactory().build(make_state()))  # type: ignore[arg-type]
+        await archive.replace(RunSnapshotFactory().build(make_state()))  # type: ignore[arg-type]
 
 
 class QueueActionProvider:
@@ -121,7 +121,7 @@ async def test_harness_archives_terminal_state_with_checkpoint_event() -> None:
     )
 
     result = await loop.run(make_state())  # type: ignore[arg-type]
-    snapshot = archive.load(UUID(result["run_id"]))
+    snapshot = await archive.load(UUID(result["run_id"]))
 
     assert result["terminal_status"] is HarnessStatus.BLOCKED
     assert snapshot.terminal_status is HarnessStatus.BLOCKED

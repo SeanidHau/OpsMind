@@ -70,7 +70,7 @@ class ReplayDiagnosisRunner(RecordingDiagnosisRunner):
         self.replay = replay
         self.read_run_ids: list[UUID] = []
 
-    def get_run(self, run_id: UUID) -> ReplayResult:
+    async def get_run(self, run_id: UUID) -> ReplayResult:
         """返回匹配的缓存结果；未知 ID 按归档契约抛出 KeyError。"""
         self.read_run_ids.append(run_id)
         if run_id != self.replay.source_run_id:
@@ -108,7 +108,7 @@ class ApprovalDiagnosisRunner(RecordingDiagnosisRunner):
         self.approval_calls: list[tuple[UUID, ApprovalCommand]] = []
         self.approved_resume_calls: list[UUID] = []
 
-    def resolve_approval(self, *, run_id: UUID, command: ApprovalCommand) -> DiagnosisState:
+    async def resolve_approval(self, *, run_id: UUID, command: ApprovalCommand) -> DiagnosisState:
         """模拟仅保存审批决议，不执行工具。"""
         self.approval_calls.append((run_id, command))
         state = create_initial_state(

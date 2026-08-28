@@ -207,7 +207,7 @@ class HarnessLoop:
 
     async def resume_approved(self, run_id: UUID) -> DiagnosisState:
         """从已批准 checkpoint 续跑，累计剩余墙钟时间并替换最新快照。"""
-        state = self.restore_checkpoint(run_id)
+        state = await self.restore_checkpoint(run_id)
         resolution = state.get("approval_resolution")
 
         if resolution is None or resolution.decision not in (
@@ -234,7 +234,7 @@ class HarnessLoop:
         if not normalized_answer:
             raise ValueError("answer must not be blank")
 
-        state = self.restore_checkpoint(run_id)
+        state = await self.restore_checkpoint(run_id)
         if state.get("terminal_status") is not HarnessStatus.WAITING_USER_INPUT:
             raise ValueError("run is not waiting for user input")
 
@@ -335,11 +335,13 @@ class HarnessLoop:
                 },
             )
 
-        archived_state = self._archive_state(latest_state, replace_checkpoint=replace_checkpoint)
+        archived_state = await self._archive_state(
+            latest_state, replace_checkpoint=replace_checkpoint
+        )
         self._publish_new_events(archived_state, observed_event_ids, event_observer)
         return archived_state
 
-    def _archive_state(
+    async def _archive_state(
         self,
         state: DiagnosisState,
         *,
@@ -365,35 +367,35 @@ class HarnessLoop:
         snapshot = self._snapshot_factory.build(state_with_checkpoint)
 
         if replace_checkpoint:
-            self._run_archive.replace(snapshot)
+            await self._run_archive.replace(snapshot)
         else:
-            self._run_archive.save(snapshot)
+            await self._run_archive.save(snapshot)
 
         return state_with_checkpoint
 
-    def replay_cached(self, run_id: UUID) -> ReplayResult:
+    async def replay_cached(self, run_id: UUID) -> ReplayResult:
         """只读回放指定运行，不执行模型、工具或 LangGraph 节点。"""
-        return self._cached_replay.replay(run_id)
+        return await self._cached_replay.replay(run_id)
 
-    def restore_checkpoint(self, run_id: UUID) -> DiagnosisState:
+    async def restore_checkpoint(self, run_id: UUID) -> DiagnosisState:
         """恢复指定快照的强类型状态，不执行模型、工具或图节点。"""
-        snapshot = self._run_archive.load(run_id)
+        snapshot = await self._run_archive.load(run_id)
         return self._state_restorer.restore(snapshot)
 
-    def resolve_approval(
+    async def resolve_approval(
         self,
         *,
         run_id: UUID,
         command: ApprovalCommand,
     ) -> DiagnosisState:
         """恢复待审批 checkpoint 并返回已记录审批决议的状态。"""
-        state = self.restore_checkpoint(run_id)
+        state = await self.restore_checkpoint(run_id)
         published_event_ids = {event.event_id for event in state["trajectory"]}
         updates = self._approval_resolver.resolve(state=state, command=command)
         resolved_state = cast(DiagnosisState, {**state, **updates})
 
         # 审批决议本身也必须成为可恢复 checkpoint。
-        archived_state = self._archive_state(resolved_state, replace_checkpoint=True)
+        archived_state = await self._archive_state(resolved_state, replace_checkpoint=True)
         self._publish_new_events(archived_state, published_event_ids, self._event_observer)
         return archived_state
 

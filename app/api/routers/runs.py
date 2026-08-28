@@ -267,7 +267,7 @@ async def resolve_diagnosis_approval(
 ) -> DiagnosisRunResponse:
     """保存批准、编辑或拒绝决议，但不在当前请求执行工具。"""
     try:
-        result = approval_resolver.resolve_approval(run_id=run_id, command=command)
+        result = await approval_resolver.resolve_approval(run_id=run_id, command=command)
     except KeyError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -324,7 +324,7 @@ async def get_diagnosis_run(
 ) -> DiagnosisRunResponse:
     """只读取归档快照，不重新执行模型、工具或 Harness。"""
     try:
-        replay = diagnosis_run_reader.get_run(run_id)
+        replay = await diagnosis_run_reader.get_run(run_id)
     except KeyError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -355,7 +355,7 @@ async def get_diagnosis_run_trajectory(
 ) -> DiagnosisRunTrajectoryResponse:
     """返回缓存时间线，不重新执行模型、工具或 Harness 节点。"""
     try:
-        replay = diagnosis_run_reader.get_run(run_id)
+        replay = await diagnosis_run_reader.get_run(run_id)
     except KeyError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -377,7 +377,7 @@ async def replay_diagnosis_run(
 ) -> DiagnosisRunTrajectoryResponse:
     """返回一份独立的安全轨迹副本，不重新运行诊断。"""
     try:
-        replay = diagnosis_run_reader.get_run(run_id)
+        replay = await diagnosis_run_reader.get_run(run_id)
     except KeyError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -398,7 +398,7 @@ async def stream_diagnosis_run_events(
 ) -> StreamingResponse:
     """流式返回缓存的安全轨迹，不重新执行模型、工具或 Harness 节点。"""
     try:
-        replay = diagnosis_run_reader.get_run(run_id)
+        replay = await diagnosis_run_reader.get_run(run_id)
     except KeyError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
