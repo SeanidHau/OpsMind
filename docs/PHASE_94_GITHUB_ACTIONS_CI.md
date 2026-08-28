@@ -15,7 +15,7 @@ Python 任务使用 `uv` 安装项目锁定依赖，并按以下顺序检查：
 
 ## Rust 任务
 
-Rust 任务使用稳定工具链，并检查 GPUI 桌面端的格式、单元测试和编译：
+Rust 任务在 Ubuntu 上先安装 GPUI 链接所需的 X11 开发库，再使用稳定工具链检查桌面端的格式、单元测试和编译：
 
 1. `cargo fmt --manifest-path frontend/Cargo.toml --check`
 2. `cargo test --manifest-path frontend/Cargo.toml`
