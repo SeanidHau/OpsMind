@@ -1196,14 +1196,24 @@ impl OpsMindConsole {
                         &self.mcp_cmdb_token_input,
                     ))
                     .child(
-                        div().flex().justify_end().child(
-                            Button::new("save-mcp")
-                                .label("保存连接")
-                                .primary()
-                                .loading(self.mcp_is_saving())
-                                .disabled(self.mcp_is_saving() || !self.backend_is_ready())
-                                .on_click(cx.listener(Self::save_mcp_configuration)),
-                        ),
+                        // 独立操作栏固定在面板内，避免操作按钮与最后一个数据源卡片脱节。
+                        div()
+                            .w_full()
+                            .flex()
+                            .justify_end()
+                            .p(px(12.0))
+                            .rounded(px(10.0))
+                            .bg(rgba(0xffffff70))
+                            .border_1()
+                            .border_color(rgba(0xffffffb8))
+                            .child(
+                                Button::new("save-mcp")
+                                    .label("保存连接")
+                                    .info()
+                                    .loading(self.mcp_is_saving())
+                                    .disabled(self.mcp_is_saving() || !self.backend_is_ready())
+                                    .on_click(cx.listener(Self::save_mcp_configuration)),
+                            ),
                     );
             }
         }
