@@ -240,6 +240,7 @@ def test_run_stream_endpoint_emits_live_safe_events_and_final_summary() -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text.startswith("event: run_started\ndata: ")
     assert response.text.count("event: run_started") == 1
     assert response.text.count("event: tool_finished") == 1
     assert response.text.count("event: run_finished") == 1

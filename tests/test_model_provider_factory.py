@@ -32,6 +32,7 @@ class FakeChatModel:
 
     def __init__(self, **kwargs: object) -> None:
         self.kwargs = kwargs
+        self.structured_output_method: str | None = None
         self.__class__.instances.append(self)
 
     def with_structured_output(
@@ -39,9 +40,11 @@ class FakeChatModel:
         schema: type[object],
         *,
         include_raw: bool = False,
+        method: str | None = None,
     ) -> FakeRunnable:
         """返回满足动作提供器初始化需求的替身。"""
         del schema, include_raw
+        self.structured_output_method = method
         return FakeRunnable()
 
 
@@ -168,6 +171,26 @@ def test_provider_specific_configuration_overrides_shared_values(
 
     assert FakeChatModel.instances[0].kwargs["api_key"] == expected_key
     assert FakeChatModel.instances[0].kwargs["base_url"] == expected_base_url
+
+
+def test_deepseek_uses_function_calling_for_structured_output(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_settings: Callable[..., Settings],
+) -> None:
+    """DeepSeek Chat Completions 不使用 OpenAI JSON Schema 输出协议。"""
+    FakeChatModel.instances = []
+    monkeypatch.setattr("app.diagnosis.providers.ChatOpenAI", FakeChatModel)
+
+    create_action_provider(
+        provider_settings(
+            "openai",
+            isolated_settings,
+            llm_base_url="https://api.deepseek.com",
+        )
+    )
+
+    assert FakeChatModel.instances[0].structured_output_method == "function_calling"
+    assert FakeChatModel.instances[0].kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
 
 
 def test_provider_factory_accepts_extension_registry(

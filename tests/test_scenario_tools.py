@@ -100,6 +100,17 @@ async def test_tools_return_metrics_and_topology_for_same_scenario() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tools_accept_an_unambiguous_service_shorthand() -> None:
+    """模型省略稳定 `-service` 后缀时仍应命中同一受控场景。"""
+    registry = ToolRegistry()
+    register_scenario_tools(registry, ScenarioStore([payment_timeout_scenario()]))
+
+    metrics = await registry.execute(tool_action("query_metrics", service="payment"))
+
+    assert metrics["service"] == "payment-service"
+
+
+@pytest.mark.asyncio
 async def test_unknown_service_is_reported_as_tool_execution_error() -> None:
     """不存在的服务不能伪造空证据，必须显式返回工具错误。"""
     registry = ToolRegistry()

@@ -103,7 +103,7 @@ def trajectory_response(replay: ReplayResult) -> DiagnosisRunTrajectoryResponse:
 
 def sse_event(*, event: str, data: Mapping[str, Any]) -> str:
     """编码一条 Server-Sent Event，供浏览器按事件类型消费。"""
-    return f"event: {event}\\ndata: {json.dumps(data, ensure_ascii=False)}\\n\\n"
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 def trajectory_sse_stream(replay: ReplayResult) -> Iterator[str]:

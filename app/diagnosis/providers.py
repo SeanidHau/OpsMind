@@ -1,7 +1,7 @@
 """模型提供器到结构化动作提供器的受控适配。"""
 
 from collections.abc import Mapping
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
@@ -64,6 +64,9 @@ class OpenAIModelProvider:
         base_url = settings.openai_base_url or settings.llm_base_url
         if base_url is not None:
             model_kwargs["base_url"] = str(base_url)
+            if base_url.host == "api.deepseek.com":
+                # DeepSeek 思考模式不接受当前 Agent 使用的 tool_choice。
+                model_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         return ChatOpenAI(**model_kwargs)  # type: ignore[arg-type]
 
 
@@ -94,6 +97,19 @@ DEFAULT_MODEL_PROVIDERS: dict[str, ChatModelProvider] = {
 }
 
 
+def structured_output_method(
+    provider_name: str,
+    settings: Settings,
+) -> Literal["function_calling"] | None:
+    """为不支持 OpenAI JSON Schema 的兼容端点选择可用输出协议。"""
+    if provider_name != "openai":
+        return None
+    base_url = settings.openai_base_url or settings.llm_base_url
+    if base_url is not None and base_url.host == "api.deepseek.com":
+        return "function_calling"
+    return None
+
+
 def create_action_provider(
     settings: Settings,
     *,
@@ -116,4 +132,5 @@ def create_action_provider(
     return LangChainActionProvider(
         provider.create_chat_model(settings),
         tools=tool_definitions,
+        structured_output_method=structured_output_method(provider_name, settings),
     )

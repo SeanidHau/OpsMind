@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
@@ -29,8 +29,7 @@ class StructuredActionChatModel(Protocol):
     def with_structured_output(
         self,
         schema: type[AgentAction],
-        *,
-        include_raw: bool = False,
+        **kwargs: Any,
     ) -> ActionRunnable:
         """将聊天模型绑定到指定 schema，并可保留原始响应。"""
 
@@ -70,6 +69,8 @@ class LangChainActionProvider:
         input_cost_per_1k_tokens: float = 0.0,
         output_cost_per_1k_tokens: float = 0.0,
         tools: tuple[ToolDefinition, ...] = (),
+        structured_output_method: Literal["function_calling", "json_mode", "json_schema"]
+        | None = None,
     ) -> None:
         """绑定结构化动作模型和可选的 Token 价格配置。"""
         if input_cost_per_1k_tokens < 0:
@@ -89,9 +90,14 @@ class LangChainActionProvider:
             for tool in tools
         )
         # include_raw=True 用于从 AIMessage 中提取供应商实际用量。
-        self._action_runnable = chat_model.with_structured_output(
-            AgentAction,
-            include_raw=True,
+        self._action_runnable = (
+            chat_model.with_structured_output(
+                AgentAction,
+                include_raw=True,
+                method=structured_output_method,
+            )
+            if structured_output_method is not None
+            else chat_model.with_structured_output(AgentAction, include_raw=True)
         )
 
     async def propose_action(self, state: DiagnosisState) -> ModelInvocation:

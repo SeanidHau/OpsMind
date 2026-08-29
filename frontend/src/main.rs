@@ -527,19 +527,6 @@ impl OpsMindConsole {
         }
     }
 
-    fn submission_detail(&self) -> String {
-        match &self.submission {
-            SubmissionState::Draft => String::from("填写描述后按 ⌘↵ 或点击按钮开始诊断。"),
-            SubmissionState::Invalid => String::from("诊断描述不能为空，且不得超过 4000 个字符。"),
-            SubmissionState::Prepared { query } => {
-                format!(
-                    "正在使用 {} 个字符的诊断描述进行流式诊断。",
-                    query.chars().count()
-                )
-            }
-        }
-    }
-
     fn operator_submission_detail(&self) -> String {
         match &self.operator_submission {
             SubmissionState::Draft => String::from("补充信息只会用于恢复当前运行。"),
@@ -1061,37 +1048,26 @@ impl Render for OpsMindConsole {
                                         )
                                         .child(Input::new(&self.diagnosis_input).h(px(150.0)))
                                         .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .justify_between()
-                                                .child(
-                                                    div()
-                                                        .text_color(rgb(0x697783))
-                                                        .child(self.submission_detail()),
-                                                )
-                                                .child(
-                                                    Button::new("prepare-diagnosis")
-                                                        .label("运行调查  →")
-                                                        .primary()
-                                                        .loading(self.is_busy())
-                                                        .disabled(
-                                                            !self.backend_is_ready()
-                                                                || self.is_busy()
-                                                                || self
-                                                                    .waiting_for_user_input()
-                                                                    .is_some()
-                                                                || self
-                                                                    .waiting_for_approval()
-                                                                    .is_some()
-                                                                || self
-                                                                    .approval_is_recorded()
-                                                                    .is_some(),
-                                                        )
-                                                        .on_click(
-                                                            cx.listener(Self::submit_diagnosis),
-                                                        ),
-                                                ),
+                                            div().flex().justify_end().child(
+                                                Button::new("prepare-diagnosis")
+                                                    .label("运行调查  →")
+                                                    .primary()
+                                                    .loading(self.is_busy())
+                                                    .disabled(
+                                                        !self.backend_is_ready()
+                                                            || self.is_busy()
+                                                            || self
+                                                                .waiting_for_user_input()
+                                                                .is_some()
+                                                            || self
+                                                                .waiting_for_approval()
+                                                                .is_some()
+                                                            || self
+                                                                .approval_is_recorded()
+                                                                .is_some(),
+                                                    )
+                                                    .on_click(cx.listener(Self::submit_diagnosis)),
+                                            ),
                                         ),
                                 )
                                 .child(

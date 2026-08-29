@@ -41,6 +41,7 @@ class FakeChatModel:
     def __init__(self, response: AgentAction | dict[str, Any]) -> None:
         self.schema: type[AgentAction] | None = None
         self.include_raw: bool | None = None
+        self.method: str | None = None
         self.runnable = FakeStructuredRunnable(response)
 
     def with_structured_output(
@@ -48,10 +49,12 @@ class FakeChatModel:
         schema: type[AgentAction],
         *,
         include_raw: bool = False,
+        method: str | None = None,
     ) -> FakeStructuredRunnable:
         """记录绑定的 Pydantic schema 并返回结构化 Runnable。"""
         self.schema = schema
         self.include_raw = include_raw
+        self.method = method
         return self.runnable
 
 
@@ -125,6 +128,7 @@ async def test_provider_binds_agent_action_schema_and_uses_model_context() -> No
     assert invocation.usage.total_tokens == 0
     assert model.schema is AgentAction
     assert model.include_raw is True
+    assert model.method is None
     messages = model.runnable.inputs[0]
     assert isinstance(messages[0], SystemMessage)
     assert isinstance(messages[1], HumanMessage)
@@ -145,6 +149,15 @@ async def test_provider_binds_agent_action_schema_and_uses_model_context() -> No
     assert "evidence:<evidence_id>" in str(messages[0].content)
     assert "update_plan" in str(messages[0].content)
     assert "replan_feedback" in str(messages[0].content)
+
+
+def test_provider_can_use_function_calling_for_compatible_endpoints() -> None:
+    """兼容端点可显式选择函数调用结构化输出协议。"""
+    model = FakeChatModel({"action_type": "ask_user", "question": "影响范围是什么？"})
+
+    LangChainActionProvider(model, structured_output_method="function_calling")
+
+    assert model.method == "function_calling"
 
 
 @pytest.mark.asyncio

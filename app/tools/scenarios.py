@@ -22,7 +22,10 @@ class ScenarioStore:
 
     def get(self, service: str) -> IncidentScenario:
         """返回指定服务的场景；不存在时拒绝伪造空证据。"""
-        scenario = self._scenarios.get(service)
+        normalized_service = service.strip()
+        scenario = self._scenarios.get(normalized_service)
+        if scenario is None and not normalized_service.endswith("-service"):
+            scenario = self._scenarios.get(f"{normalized_service}-service")
         if scenario is None:
             raise ToolExecutionError(f"scenario not found: {service}")
         return scenario
