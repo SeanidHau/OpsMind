@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any, Literal, Protocol
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -59,6 +60,7 @@ class LangChainActionProvider:
     final_answer。其他反馈必须先选择 update_plan；不要重复被拒绝的工具或最终回答动作。
 
     只有证据足够时才选择 final_answer。final_answer 必须携带 report。
+    final_answer 不得携带 plan_item_id。
     report 的摘要、候选根因和建议必须基于当前 context；
     report.evidence_ids 只能引用 context 中形如 evidence:<evidence_id> 的条目，
     并且写入时应去掉 evidence: 前缀。
@@ -145,12 +147,20 @@ class LangChainActionProvider:
         if isinstance(response, dict) and "parsed" in response:
             # include_raw=True 时，LangChain 通常返回 raw、parsed 和 parsing_error。
             parsing_error = response.get("parsing_error")
-            if parsing_error is not None:
+            parsed_action = response.get("parsed")
+            if parsing_error is not None or parsed_action is None:
+                recovered_action = self._recover_final_action(response.get("raw"))
+                if recovered_action is not None:
+                    return ModelInvocation(
+                        action=recovered_action,
+                        usage=self._extract_usage(response.get("raw")),
+                    )
                 if isinstance(parsing_error, BaseException):
                     raise parsing_error
-                raise ValueError(f"failed to parse structured action: {parsing_error}")
+                if parsing_error is not None:
+                    raise ValueError(f"failed to parse structured action: {parsing_error}")
+                raise ValueError("structured action response did not contain a parsed action")
 
-            parsed_action = response.get("parsed")
             action = (
                 parsed_action
                 if isinstance(parsed_action, AgentAction)
@@ -183,6 +193,57 @@ class LangChainActionProvider:
                 for dependency_id in item.depends_on
             )
         ]
+
+    @staticmethod
+    def _recover_final_action(raw_response: Any) -> AgentAction | None:
+        """忽略最终报告中无语义的计划编号，兼容部分模型的冗余字段。"""
+        for args in LangChainActionProvider._raw_action_args(raw_response):
+            if args.get("action_type") != "final_answer":
+                continue
+            sanitized_args = dict(args)
+            sanitized_args.pop("plan_item_id", None)
+            try:
+                return AgentAction.model_validate(sanitized_args)
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
+    def _raw_action_args(raw_response: Any) -> list[Mapping[str, Any]]:
+        """从 LangChain 标准和兼容端点的函数调用字段中读取动作参数。"""
+        candidates: list[Any] = []
+        for field_name in ("tool_calls", "invalid_tool_calls"):
+            tool_calls = getattr(raw_response, field_name, ())
+            if isinstance(tool_calls, list):
+                candidates.extend(
+                    tool_call.get("args", tool_call.get("function"))
+                    for tool_call in tool_calls
+                    if isinstance(tool_call, Mapping)
+                )
+
+        additional_kwargs = getattr(raw_response, "additional_kwargs", {})
+        if isinstance(additional_kwargs, Mapping):
+            raw_tool_calls = additional_kwargs.get("tool_calls", ())
+            if isinstance(raw_tool_calls, list):
+                candidates.extend(
+                    tool_call.get("function", tool_call)
+                    for tool_call in raw_tool_calls
+                    if isinstance(tool_call, Mapping)
+                )
+        candidates.append(getattr(raw_response, "content", None))
+
+        action_args: list[Mapping[str, Any]] = []
+        for candidate in candidates:
+            if isinstance(candidate, Mapping):
+                candidate = candidate.get("arguments", candidate)
+            if isinstance(candidate, str):
+                try:
+                    candidate = json.loads(candidate)
+                except json.JSONDecodeError:
+                    continue
+            if isinstance(candidate, Mapping):
+                action_args.append(candidate)
+        return action_args
 
     @staticmethod
     def _as_non_negative_int(value: Any) -> int:

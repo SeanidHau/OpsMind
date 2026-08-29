@@ -23,7 +23,7 @@ class ModelFailureClassifier(Protocol):
 
 
 class DefaultModelFailureClassifier:
-    """仅允许明确的临时传输故障进入自动重试路径。"""
+    """仅允许临时传输故障和空结构化响应进入自动重试路径。"""
 
     def classify(self, error: Exception) -> ModelFailure:
         """将常见异常归为临时故障或不可恢复故障。"""
@@ -42,6 +42,14 @@ class DefaultModelFailureClassifier:
             return ModelFailure(
                 retryable=True,
                 category="transient_transport_error",
+                message=error_text,
+            )
+
+        # 兼容端点偶发返回空 parsed 字段；不涉及工具执行，可安全重试一次。
+        if error_text == "structured action response did not contain a parsed action":
+            return ModelFailure(
+                retryable=True,
+                category="empty_structured_output",
                 message=error_text,
             )
 

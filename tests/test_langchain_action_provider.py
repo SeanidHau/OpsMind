@@ -68,9 +68,13 @@ class FakeRawResponse:
         *,
         usage_metadata: dict[str, Any] | None = None,
         response_metadata: dict[str, Any] | None = None,
+        tool_calls: list[dict[str, Any]] | None = None,
+        invalid_tool_calls: list[dict[str, Any]] | None = None,
     ) -> None:
         self.usage_metadata = usage_metadata
         self.response_metadata = response_metadata
+        self.tool_calls = tool_calls or []
+        self.invalid_tool_calls = invalid_tool_calls or []
 
 
 def make_state() -> dict[str, Any]:
@@ -246,6 +250,38 @@ async def test_provider_extracts_raw_usage_and_calculates_cost() -> None:
     assert invocation.usage.output_tokens == 30
     assert invocation.usage.total_tokens == 150
     assert invocation.usage.estimated_cost_usd == pytest.approx(0.0018)
+
+
+@pytest.mark.asyncio
+async def test_provider_recovers_a_final_report_with_an_irrelevant_plan_item() -> None:
+    """模型为最终报告误带计划编号时，只移除该无语义字段后继续完成诊断。"""
+    raw_response = FakeRawResponse(
+        invalid_tool_calls=[
+            {
+                "args": json.dumps(
+                    {
+                        "action_type": "final_answer",
+                        "intent": "输出诊断结论",
+                        "reason": "证据已经足够。",
+                        "plan_item_id": "018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1",
+                        "report": diagnosis_report().model_dump(mode="json"),
+                    }
+                )
+            }
+        ]
+    )
+    model = FakeChatModel(
+        {
+            "raw": raw_response,
+            "parsed": None,
+            "parsing_error": None,
+        }
+    )
+
+    invocation = await LangChainActionProvider(model).propose_action(make_state())
+
+    assert invocation.action.action_type is ActionType.FINAL_ANSWER
+    assert invocation.action.plan_item_id is None
 
 
 @pytest.mark.asyncio

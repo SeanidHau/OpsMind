@@ -121,6 +121,11 @@ def make_loop(
     [
         (ConnectionError("network down"), True, "transient_transport_error"),
         (PermissionError("forbidden"), False, "authorization_error"),
+        (
+            ValueError("structured action response did not contain a parsed action"),
+            True,
+            "empty_structured_output",
+        ),
         (ValueError("invalid output"), False, "invalid_model_response"),
         (RuntimeError("unknown"), False, "unclassified_model_error"),
     ],
