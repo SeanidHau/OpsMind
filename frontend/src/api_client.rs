@@ -25,6 +25,23 @@ pub struct ScenarioSummary {
     pub dependency_count: u32,
 }
 
+/// 工作台知识库页面展示的最小文档信息。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeDocumentSummary {
+    pub title: String,
+    pub chunk_count: usize,
+}
+
+/// 知识库目录的安全摘要，不包含正文或向量内容。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeCatalog {
+    pub document_count: usize,
+    pub chunk_count: usize,
+    pub documents: Vec<KnowledgeDocumentSummary>,
+}
+
 /// 创建一次实时诊断运行所需的公开请求字段。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StreamDiagnosisRequest {
@@ -132,6 +149,11 @@ impl OpsMindApiClient {
     /// 读取可公开展示的场景摘要，不请求任何原始诊断证据。
     pub fn scenarios(&self) -> Result<Vec<ScenarioSummary>, ApiClientError> {
         self.get_json("/scenarios")
+    }
+
+    /// 读取知识库目录，仅用于展示已加载的文档概览。
+    pub fn knowledge_catalog(&self) -> Result<KnowledgeCatalog, ApiClientError> {
+        self.get_json("/knowledge")
     }
 
     /// 创建诊断运行，并在读取到每个完整 SSE 事件时立即回调。
@@ -369,6 +391,26 @@ mod tests {
                 .recv()
                 .expect("captured request")
                 .starts_with("GET /api/v1/scenarios HTTP/1.1")
+        );
+    }
+
+    #[test]
+    fn reads_knowledge_catalog_without_document_content() {
+        let (base_url, requests) = serve_once(
+            r#"{"document_count":1,"chunk_count":2,"documents":[{"title":"支付处理手册","chunk_count":2}]}"#,
+        );
+
+        let catalog = OpsMindApiClient::new(base_url)
+            .knowledge_catalog()
+            .expect("knowledge catalog");
+
+        assert_eq!(catalog.document_count, 1);
+        assert_eq!(catalog.documents[0].title, "支付处理手册");
+        assert!(
+            requests
+                .recv()
+                .expect("captured request")
+                .starts_with("GET /api/v1/knowledge HTTP/1.1")
         );
     }
 

@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from pymilvus import MilvusClient  # type: ignore[import-untyped]
 
 from app.api.middleware import RequestContextMiddleware
+from app.api.routers.knowledge import router as knowledge_router
 from app.api.routers.runs import router as runs_router
 from app.api.routers.scenarios import router as scenarios_router
 from app.api.routers.system import router as system_router
@@ -131,6 +132,7 @@ def create_app(
 
     # 所有公开 API 使用 /api/v1 前缀，便于后续版本演进。
     app.include_router(system_router)
+    app.include_router(knowledge_router)
     app.include_router(scenarios_router)
     app.include_router(tools_router)
     app.include_router(runs_router)

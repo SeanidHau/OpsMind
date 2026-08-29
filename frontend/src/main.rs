@@ -21,8 +21,8 @@ use gpui_component::{
 
 use crate::{
     api_client::{
-        ApprovalRequest, DiagnosisRunSummary, OpsMindApiClient, ResumeDiagnosisRequest,
-        StreamDiagnosisRequest,
+        ApprovalRequest, DiagnosisRunSummary, KnowledgeCatalog, OpsMindApiClient,
+        ResumeDiagnosisRequest, StreamDiagnosisRequest,
     },
     sse::ServerSentEvent,
 };
@@ -37,6 +37,7 @@ struct OpsMindConsole {
     thread_id: String,
     connection: ConnectionState,
     catalog: CatalogState,
+    knowledge_catalog: KnowledgeCatalogState,
     diagnosis_input: Entity<InputState>,
     operator_input: Entity<InputState>,
     approval_input: Entity<InputState>,
@@ -67,6 +68,12 @@ enum ConnectionState {
 enum CatalogState {
     Waiting,
     Ready { count: usize },
+    Unavailable,
+}
+
+enum KnowledgeCatalogState {
+    Loading,
+    Ready(KnowledgeCatalog),
     Unavailable,
 }
 
@@ -173,6 +180,7 @@ impl OpsMindConsole {
             thread_id: desktop_identifier("thread"),
             connection: ConnectionState::Checking,
             catalog: CatalogState::Waiting,
+            knowledge_catalog: KnowledgeCatalogState::Loading,
             diagnosis_input,
             operator_input,
             approval_input,
@@ -187,6 +195,7 @@ impl OpsMindConsole {
             _approval_input_subscription: approval_input_subscription,
         };
         console.refresh_backend_status(cx);
+        console.refresh_knowledge_catalog(cx);
         console
     }
 
@@ -225,6 +234,30 @@ impl OpsMindConsole {
         }
     }
 
+    /// 在后台读取知识目录，避免切换工作区时阻塞窗口。
+    fn refresh_knowledge_catalog(&mut self, cx: &mut Context<Self>) {
+        self.knowledge_catalog = KnowledgeCatalogState::Loading;
+        let api_base_url = self.api_base_url.clone();
+        let catalog_task = cx
+            .background_executor()
+            .spawn(async move { OpsMindApiClient::new(api_base_url).knowledge_catalog() });
+        let this = cx.weak_entity();
+        let mut async_cx = cx.to_async();
+
+        cx.foreground_executor()
+            .spawn(async move {
+                let catalog = catalog_task.await;
+                let _ = this.update(&mut async_cx, |console, cx| {
+                    console.knowledge_catalog = match catalog {
+                        Ok(catalog) => KnowledgeCatalogState::Ready(catalog),
+                        Err(_) => KnowledgeCatalogState::Unavailable,
+                    };
+                    cx.notify();
+                });
+            })
+            .detach();
+    }
+
     fn connection_detail(&self) -> String {
         match &self.connection {
             ConnectionState::Checking => String::from("正在连接服务…"),
@@ -248,6 +281,7 @@ impl OpsMindConsole {
 
     fn show_knowledge(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.page = WorkspacePage::Knowledge;
+        self.refresh_knowledge_catalog(cx);
         cx.notify();
     }
 
@@ -1209,10 +1243,7 @@ impl Render for OpsMindConsole {
                                 )
                             })
                             .when(self.page == WorkspacePage::Knowledge, |this| {
-                                this.child(workspace_empty_state(
-                                    "知识库正在准备中",
-                                    "完成知识库导入后，相关说明会显示在这里。",
-                                ))
+                                this.child(knowledge_catalog_panel(&self.knowledge_catalog))
                             })
                             .when(self.page == WorkspacePage::History, |this| {
                                 this.child(workspace_empty_state(
@@ -1352,6 +1383,94 @@ fn workspace_empty_state(title: &'static str, detail: &'static str) -> impl Into
         .border_color(rgba(0xffffffb8))
         .child(div().text_xl().text_color(rgb(0x4f829c)).child(title))
         .child(div().text_color(rgb(0x697783)).child(detail))
+}
+
+fn knowledge_catalog_panel(catalog: &KnowledgeCatalogState) -> gpui::Div {
+    let mut panel = div()
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .p(px(20.0))
+        .rounded(px(14.0))
+        .bg(rgba(0xffffff8f))
+        .border_1()
+        .border_color(rgba(0xffffffb8));
+
+    match catalog {
+        KnowledgeCatalogState::Loading => {
+            panel = panel
+                .child(div().text_color(rgb(0x4f829c)).child("正在加载知识库…"))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(rgb(0x697783))
+                        .child("正在读取已导入的文档目录。"),
+                )
+        }
+        KnowledgeCatalogState::Unavailable => {
+            panel = panel
+                .child(div().text_color(rgb(0xc76a62)).child("暂时无法读取知识库"))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(rgb(0x697783))
+                        .child("请确认后端服务已启动后重试。"),
+                )
+        }
+        KnowledgeCatalogState::Ready(catalog) => {
+            panel = panel.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .child(div().text_color(rgb(0x4f829c)).child("已加载的知识"))
+                            .child(div().text_size(px(12.0)).text_color(rgb(0x697783)).child(
+                                format!(
+                                    "{} 份文档，{} 个知识片段",
+                                    catalog.document_count, catalog.chunk_count
+                                ),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .px(px(10.0))
+                            .py(px(5.0))
+                            .rounded(px(999.0))
+                            .bg(rgba(0xe3f1f8c7))
+                            .text_size(px(11.0))
+                            .text_color(rgb(0x4f829c))
+                            .child("可用于诊断"),
+                    ),
+            );
+            for document in &catalog.documents {
+                panel = panel.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .p(px(14.0))
+                        .rounded(px(10.0))
+                        .bg(rgba(0xffffffa3))
+                        .border_1()
+                        .border_color(rgba(0xffffffd1))
+                        .child(div().text_size(px(13.0)).child(document.title.clone()))
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(rgb(0x697783))
+                                .child(format!("{} 个片段", document.chunk_count)),
+                        ),
+                );
+            }
+        }
+    }
+
+    panel
 }
 
 fn panel(title: &'static str, detail: &str) -> impl IntoElement {
