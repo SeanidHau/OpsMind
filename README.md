@@ -101,6 +101,24 @@ ANTHROPIC_BASE_URL=https://your-compatible-endpoint
 
 配置 Prometheus 地址后，Agent 会获得只读 `query_prometheus` 工具，可用 PromQL 查询实时指标。该工具只调用 `/api/v1/query`，限制单次查询长度和返回样本数；请为所用令牌配置最小只读权限。
 
+### MCP 观测工具
+
+当需要连接多个真实运维系统时，推荐通过内置 MCP Server 接入。Harness 内部仍使用统一的 Tool Adapter 和既有的预算、审批与只读策略，但真实请求被隔离在 MCP 进程中，主服务不会自行保存或拼接外部系统访问逻辑。
+
+在 `.env` 中填入各系统地址及其最小只读权限令牌，然后启用内置 Server：
+
+```dotenv
+OBSERVABILITY_MCP_COMMAND=uv
+OBSERVABILITY_MCP_ARGS=run python -m app.mcp.observability_server
+PROMETHEUS_URL=http://127.0.0.1:9090
+LOKI_URL=http://127.0.0.1:3100
+JAEGER_URL=http://127.0.0.1:16686
+KUBERNETES_URL=https://your-kubernetes-api.example
+CMDB_URL=https://your-cmdb.example
+```
+
+启用后可用的只读工具包括：`query_prometheus`（PromQL）、`query_loki`（LogQL）、`query_jaeger`（服务调用链）、`query_kubernetes`（Pods、Services、Deployments、Events）和 `query_cmdb`（服务与依赖）。每个工具最多在单次诊断中调用两次；Kubernetes 资源有固定白名单，所有上游响应均会限量后再交给 Agent。若未启用 `OBSERVABILITY_MCP_COMMAND`，应用继续使用原有的 Prometheus 直连配置。
+
 ```dotenv
 PROMETHEUS_URL=https://prometheus.example.com
 PROMETHEUS_BEARER_TOKEN=your-read-only-token

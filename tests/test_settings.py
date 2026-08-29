@@ -79,3 +79,35 @@ def test_run_archive_backend_uses_explicit_configuration() -> None:
         create_run_archive(make_settings(run_archive_backend="postgres")),
         PostgresRunArchive,
     )
+
+
+def test_app_factory_registers_mcp_observability_tools_when_configured() -> None:
+    """MCP 配置启用后，模型只会看到受本地 Adapter 约束的五个只读工具。"""
+    app = create_app(
+        settings=make_settings(
+            observability_mcp_command="uv",
+            observability_mcp_args="run python -m app.mcp.observability_server",
+        )
+    )
+
+    definitions = {
+        definition.name: definition for definition in app.state.tool_registry.definitions()
+    }
+
+    assert {
+        "query_prometheus",
+        "query_loki",
+        "query_jaeger",
+        "query_kubernetes",
+        "query_cmdb",
+    } <= set(definitions)
+    assert all(
+        definitions[name].read_only
+        for name in {
+            "query_prometheus",
+            "query_loki",
+            "query_jaeger",
+            "query_kubernetes",
+            "query_cmdb",
+        }
+    )

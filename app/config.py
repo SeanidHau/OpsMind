@@ -43,6 +43,17 @@ class Settings(BaseSettings):
     milvus_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:19530")
     prometheus_url: AnyHttpUrl | None = None
     prometheus_bearer_token: SecretStr | None = None
+    loki_url: AnyHttpUrl | None = None
+    loki_bearer_token: SecretStr | None = None
+    jaeger_url: AnyHttpUrl | None = None
+    jaeger_bearer_token: SecretStr | None = None
+    kubernetes_url: AnyHttpUrl | None = None
+    kubernetes_bearer_token: SecretStr | None = None
+    cmdb_url: AnyHttpUrl | None = None
+    cmdb_bearer_token: SecretStr | None = None
+    # 设置后，Harness 通过 stdio MCP Server 调用观测系统；未设置时保留直连 Prometheus 回退。
+    observability_mcp_command: str | None = None
+    observability_mcp_args: str | None = None
 
     # 模型供应商配置保持可选，避免健康检查依赖真实密钥。
     llm_provider: str | None = None
@@ -86,6 +97,16 @@ class Settings(BaseSettings):
         "langsmith_api_key",
         "prometheus_url",
         "prometheus_bearer_token",
+        "loki_url",
+        "loki_bearer_token",
+        "jaeger_url",
+        "jaeger_bearer_token",
+        "kubernetes_url",
+        "kubernetes_bearer_token",
+        "cmdb_url",
+        "cmdb_bearer_token",
+        "observability_mcp_command",
+        "observability_mcp_args",
         mode="before",
     )
     @classmethod

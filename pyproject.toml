@@ -17,6 +17,7 @@ dependencies = [
     "pydantic>=2.10,<3.0",
     "pydantic-settings>=2.7,<3.0",
     "pymilvus>=2.6,<3.0",
+    "mcp>=1.28,<2",
     "sqlalchemy[asyncio]>=2.0,<3.0",
     "structlog>=25.0,<26.0",
     "tenacity>=9.0,<10.0",
