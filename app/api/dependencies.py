@@ -12,6 +12,7 @@ from app.diagnosis.runner import (
     DiagnosisRunResumer,
     StreamingDiagnosisRunner,
 )
+from app.harness.snapshot import RunArchive
 from app.tools.registry import ToolRegistry
 from app.tools.scenarios import ScenarioStore
 
@@ -26,6 +27,11 @@ def get_tool_registry(request: Request) -> ToolRegistry:
     """从应用状态读取与场景存储绑定的只读工具注册表。"""
     # 诊断运行路由将通过该依赖取得可执行工具，不自行创建注册表。
     return cast(ToolRegistry, request.app.state.tool_registry)
+
+
+def get_run_archive(request: Request) -> RunArchive:
+    """返回运行归档，用于只读的历史记录目录。"""
+    return cast(RunArchive, request.app.state.run_archive)
 
 
 def get_diagnosis_runner(request: Request) -> DiagnosisRunner:

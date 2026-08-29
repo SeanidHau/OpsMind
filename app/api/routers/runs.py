@@ -16,10 +16,13 @@ from app.api.dependencies import (
     get_diagnosis_run_reader,
     get_diagnosis_run_resumer,
     get_diagnosis_runner,
+    get_run_archive,
     get_streaming_diagnosis_runner,
 )
 from app.api.schemas.runs import (
     CreateDiagnosisRunRequest,
+    DiagnosisRunHistoryItem,
+    DiagnosisRunHistoryResponse,
     DiagnosisRunResponse,
     DiagnosisRunTrajectoryResponse,
     DiagnosisTrajectoryEventResponse,
@@ -35,7 +38,14 @@ from app.diagnosis.runner import (
     DiagnosisRunResumer,
     StreamingDiagnosisRunner,
 )
-from app.models.contracts import AgentEvent, ApprovalCommand, DiagnosisState, ReplayResult
+from app.harness.snapshot import RunArchive
+from app.models.contracts import (
+    AgentEvent,
+    ApprovalCommand,
+    DiagnosisState,
+    ReplayResult,
+    RunSnapshot,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["runs"])
 
@@ -50,6 +60,17 @@ def response_from_state(result: Mapping[str, Any]) -> DiagnosisRunResponse:
         pending_question=result.get("pending_question"),
         pending_approval=pending_approval_from_state(result),
         errors=list(result["errors"]),
+    )
+
+
+def history_item_from_snapshot(snapshot: RunSnapshot) -> DiagnosisRunHistoryItem:
+    """将归档快照投影为不包含报告正文和内部状态的历史条目。"""
+    query = str(snapshot.final_state.get("user_query", "")).strip()
+    return DiagnosisRunHistoryItem(
+        run_id=snapshot.run_id,
+        status=snapshot.terminal_status,
+        step_count=int(snapshot.final_state.get("step_count", 0)),
+        query=query[:200] or "未记录问题描述",
     )
 
 
@@ -194,6 +215,22 @@ async def create_diagnosis_run(
         user_query=payload.user_query,
     )
     return response_from_state(result)
+
+
+@router.get(
+    "/runs",
+    response_model=DiagnosisRunHistoryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="查看诊断历史",
+)
+async def list_diagnosis_runs(
+    run_archive: Annotated[RunArchive, Depends(get_run_archive)],
+) -> DiagnosisRunHistoryResponse:
+    """返回最新的有限历史记录，不读取原始轨迹或内部上下文。"""
+    snapshots = await run_archive.list_snapshots(limit=30)
+    return DiagnosisRunHistoryResponse(
+        runs=[history_item_from_snapshot(snapshot) for snapshot in snapshots]
+    )
 
 
 @router.post(

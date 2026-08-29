@@ -28,6 +28,9 @@ class RunArchive(Protocol):
     async def replace(self, snapshot: RunSnapshot) -> None:
         """替换已存在运行的最新快照。"""
 
+    async def list_snapshots(self, *, limit: int) -> list[RunSnapshot]:
+        """按最新优先返回有限数量的运行快照。"""
+
 
 class InMemoryRunArchive:
     """用于本地开发和测试的进程内快照归档。"""
@@ -56,6 +59,17 @@ class InMemoryRunArchive:
 
         self._snapshots[snapshot.run_id] = snapshot.model_copy(deep=True)
 
+    async def list_snapshots(self, *, limit: int) -> list[RunSnapshot]:
+        """按 UUID 稳定排序，供开发环境展示最近的有限记录。"""
+        if limit <= 0:
+            return []
+        return [
+            snapshot.model_copy(deep=True)
+            for _, snapshot in sorted(
+                self._snapshots.items(), key=lambda item: str(item[0]), reverse=True
+            )[:limit]
+        ]
+
 
 class PostgresRunArchive:
     """使用 PostgreSQL JSONB 保存完整运行快照。"""
@@ -69,7 +83,14 @@ class PostgresRunArchive:
             await connection.execute(
                 text(
                     "CREATE TABLE IF NOT EXISTS run_snapshots "
-                    "(run_id UUID PRIMARY KEY, snapshot JSONB NOT NULL)"
+                    "(run_id UUID PRIMARY KEY, snapshot JSONB NOT NULL, "
+                    "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE run_snapshots ADD COLUMN IF NOT EXISTS "
+                    "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"
                 )
             )
 
@@ -127,6 +148,26 @@ class PostgresRunArchive:
             )
         if result.rowcount != 1:
             raise KeyError(f"snapshot not found for run: {snapshot.run_id}")
+
+    async def list_snapshots(self, *, limit: int) -> list[RunSnapshot]:
+        """按入库时间倒序读取快照，并复用契约校验历史数据。"""
+        if limit <= 0:
+            return []
+        async with self._engine.connect() as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT snapshot FROM run_snapshots "
+                            "ORDER BY created_at DESC LIMIT :limit"
+                        ),
+                        {"limit": limit},
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [RunSnapshot.model_validate(row) for row in rows]
 
 
 class RunSnapshotFactory:

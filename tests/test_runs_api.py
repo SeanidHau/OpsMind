@@ -1,5 +1,6 @@
 """诊断运行 API 与应用运行器注入的验收测试。"""
 
+import asyncio
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.api.main import create_app
 from app.api.routers.runs import response_from_state
 from app.harness.loop import create_initial_state
+from app.harness.snapshot import InMemoryRunArchive
 from app.models.contracts import (
     ActionType,
     AgentAction,
@@ -19,7 +21,40 @@ from app.models.contracts import (
     HarnessStatus,
     ReplayMode,
     ReplayResult,
+    RunSnapshot,
 )
+
+
+def test_runs_history_endpoint_returns_safe_archive_summaries() -> None:
+    """历史列表只公开问题摘要和运行状态，不暴露完整报告。"""
+    archive = InMemoryRunArchive()
+    run_id = uuid4()
+    asyncio.run(
+        archive.save(
+            RunSnapshot(
+                run_id=run_id,
+                session_id="history-session",
+                thread_id="history-thread",
+                terminal_status=HarnessStatus.COMPLETED,
+                final_state={"user_query": "支付服务请求超时", "step_count": 4},
+                trajectory=[],
+            )
+        )
+    )
+    with TestClient(create_app(run_archive=archive)) as client:
+        response = client.get("/api/v1/runs")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "runs": [
+            {
+                "run_id": str(run_id),
+                "status": "completed",
+                "step_count": 4,
+                "query": "支付服务请求超时",
+            }
+        ]
+    }
 
 
 class RecordingDiagnosisRunner:

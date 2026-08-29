@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from app.models.contracts import FusedRetrievalHit, RetrievalHit
+from app.models.contracts import (
+    FusedRetrievalHit,
+    KnowledgeChunk,
+    KnowledgeDocument,
+    RetrievalHit,
+    VectorizedChunk,
+)
 from app.rag.bm25 import BM25Retriever
 from app.rag.embeddings import EmbeddingClient
 from app.rag.hybrid import HybridRetriever
+from app.rag.ingestion import KnowledgeIngestor
 
 
 class SearchableVectorStore(Protocol):
@@ -21,6 +28,9 @@ class SearchableVectorStore(Protocol):
         metadata_filter: dict[str, str] | None = None,
     ) -> list[RetrievalHit]:
         """按向量查询知识分块。"""
+
+    def upsert(self, records: list[VectorizedChunk]) -> None:
+        """幂等保存已向量化的知识分块。"""
 
     def close(self) -> None:
         """关闭底层资源。"""
@@ -85,3 +95,15 @@ class KnowledgeSearcher:
     def close(self) -> None:
         """释放底层 Milvus 客户端连接。"""
         self._vector_store.close()
+
+    def ingest_document(
+        self, document: KnowledgeDocument, *, all_chunks: list[KnowledgeChunk]
+    ) -> list[VectorizedChunk]:
+        """将新增 Markdown 写入向量库，并立即刷新关键词索引。"""
+        records = KnowledgeIngestor(
+            embedder=self._embedder, vector_store=self._vector_store
+        ).ingest_document(document)
+        self._hybrid_retriever = HybridRetriever(
+            keyword_retriever=BM25Retriever(all_chunks), vector_retriever=self._vector_store
+        )
+        return records

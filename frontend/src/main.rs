@@ -1,7 +1,8 @@
 //! OpsMind 的 GPUI 桌面控制台入口。
 
 use std::{
-    env,
+    env, fs,
+    path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -21,8 +22,9 @@ use gpui_component::{
 
 use crate::{
     api_client::{
-        ApprovalRequest, DiagnosisRunSummary, KnowledgeCatalog, OpsMindApiClient,
-        ResumeDiagnosisRequest, StreamDiagnosisRequest,
+        ApiClientError, ApprovalRequest, CreateKnowledgeDocumentRequest, DiagnosisRunHistory,
+        DiagnosisRunHistoryItem, DiagnosisRunSummary, HealthStatus, KnowledgeCatalog,
+        OpsMindApiClient, ResumeDiagnosisRequest, StreamDiagnosisRequest,
     },
     sse::ServerSentEvent,
 };
@@ -36,14 +38,18 @@ struct OpsMindConsole {
     session_id: String,
     thread_id: String,
     connection: ConnectionState,
-    catalog: CatalogState,
     knowledge_catalog: KnowledgeCatalogState,
+    history: HistoryState,
     diagnosis_input: Entity<InputState>,
     operator_input: Entity<InputState>,
     approval_input: Entity<InputState>,
+    knowledge_title_input: Entity<InputState>,
+    knowledge_content_input: Entity<InputState>,
     submission: SubmissionState,
     operator_submission: SubmissionState,
     approval_submission: SubmissionState,
+    knowledge_submission: KnowledgeSubmissionState,
+    report_download: ReportDownloadState,
     page: WorkspacePage,
     run: RunState,
     trajectory: Vec<TrajectoryEntry>,
@@ -51,6 +57,8 @@ struct OpsMindConsole {
     _input_subscription: Subscription,
     _operator_input_subscription: Subscription,
     _approval_input_subscription: Subscription,
+    _knowledge_title_input_subscription: Subscription,
+    _knowledge_content_input_subscription: Subscription,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -66,16 +74,30 @@ enum ConnectionState {
     Unavailable,
 }
 
-enum CatalogState {
-    Waiting,
-    Ready { count: usize },
-    Unavailable,
-}
-
 enum KnowledgeCatalogState {
     Loading,
     Ready(KnowledgeCatalog),
     Unavailable,
+}
+
+enum HistoryState {
+    Loading,
+    Ready(DiagnosisRunHistory),
+    Unavailable,
+}
+
+enum KnowledgeSubmissionState {
+    Draft,
+    Invalid,
+    Saving,
+    Saved,
+    Failed,
+}
+
+enum ReportDownloadState {
+    Idle,
+    Saved,
+    Failed,
 }
 
 enum SubmissionState {
@@ -129,10 +151,6 @@ enum StreamUpdate {
     ApprovalRecorded { run_id: String, tool_name: String },
 }
 
-struct BootstrapSnapshot {
-    scenario_count: usize,
-}
-
 impl OpsMindConsole {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let diagnosis_input = cx.new(|cx| {
@@ -182,20 +200,46 @@ impl OpsMindConsole {
                 }
                 InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}
             });
+        let knowledge_title_input =
+            cx.new(|cx| InputState::new(window, cx).rows(1).placeholder("知识标题"));
+        let knowledge_content_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .rows(5)
+                .placeholder("输入 Markdown 内容，例如处理步骤、注意事项和适用范围")
+        });
+        let knowledge_title_input_subscription =
+            cx.subscribe(&knowledge_title_input, |console, _, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    console.knowledge_submission = KnowledgeSubmissionState::Draft;
+                    cx.notify();
+                }
+            });
+        let knowledge_content_input_subscription =
+            cx.subscribe(&knowledge_content_input, |console, _, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    console.knowledge_submission = KnowledgeSubmissionState::Draft;
+                    cx.notify();
+                }
+            });
         let mut console = Self {
             api_base_url: env::var("OPSMIND_API_BASE_URL")
                 .unwrap_or_else(|_| String::from(DEFAULT_API_BASE_URL)),
             session_id: desktop_identifier("session"),
             thread_id: desktop_identifier("thread"),
             connection: ConnectionState::Checking,
-            catalog: CatalogState::Waiting,
             knowledge_catalog: KnowledgeCatalogState::Loading,
+            history: HistoryState::Loading,
             diagnosis_input,
             operator_input,
             approval_input,
+            knowledge_title_input,
+            knowledge_content_input,
             submission: SubmissionState::Draft,
             operator_submission: SubmissionState::Draft,
             approval_submission: SubmissionState::Draft,
+            knowledge_submission: KnowledgeSubmissionState::Draft,
+            report_download: ReportDownloadState::Idle,
             page: WorkspacePage::Investigation,
             run: RunState::Idle,
             trajectory: Vec::new(),
@@ -203,6 +247,8 @@ impl OpsMindConsole {
             _input_subscription: input_subscription,
             _operator_input_subscription: operator_input_subscription,
             _approval_input_subscription: approval_input_subscription,
+            _knowledge_title_input_subscription: knowledge_title_input_subscription,
+            _knowledge_content_input_subscription: knowledge_content_input_subscription,
         };
         console.refresh_backend_status(cx);
         console.refresh_knowledge_catalog(cx);
@@ -214,7 +260,7 @@ impl OpsMindConsole {
         let api_base_url = self.api_base_url.clone();
         let snapshot_task = cx
             .background_executor()
-            .spawn(async move { load_bootstrap_snapshot(api_base_url) });
+            .spawn(async move { OpsMindApiClient::new(api_base_url).health() });
         let this = cx.weak_entity();
         let mut async_cx = cx.to_async();
 
@@ -229,17 +275,13 @@ impl OpsMindConsole {
             .detach();
     }
 
-    fn apply_bootstrap_snapshot(&mut self, snapshot: Result<BootstrapSnapshot, ()>) {
+    fn apply_bootstrap_snapshot(&mut self, snapshot: Result<HealthStatus, ApiClientError>) {
         match snapshot {
-            Ok(snapshot) => {
+            Ok(_) => {
                 self.connection = ConnectionState::Ready;
-                self.catalog = CatalogState::Ready {
-                    count: snapshot.scenario_count,
-                };
             }
-            Err(()) => {
+            Err(_) => {
                 self.connection = ConnectionState::Unavailable;
-                self.catalog = CatalogState::Unavailable;
             }
         }
     }
@@ -276,14 +318,6 @@ impl OpsMindConsole {
         }
     }
 
-    fn catalog_detail(&self) -> String {
-        match &self.catalog {
-            CatalogState::Waiting => String::from("正在加载可选场景…"),
-            CatalogState::Ready { count } => format!("可选场景 {count} 个"),
-            CatalogState::Unavailable => String::from("连接后即可查看可选场景"),
-        }
-    }
-
     fn show_investigation(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.page = WorkspacePage::Investigation;
         cx.notify();
@@ -297,6 +331,95 @@ impl OpsMindConsole {
 
     fn show_history(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.page = WorkspacePage::History;
+        self.refresh_history(cx);
+        cx.notify();
+    }
+
+    fn refresh_history(&mut self, cx: &mut Context<Self>) {
+        self.history = HistoryState::Loading;
+        let api_base_url = self.api_base_url.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { OpsMindApiClient::new(api_base_url).run_history() });
+        let this = cx.weak_entity();
+        let mut async_cx = cx.to_async();
+        cx.foreground_executor()
+            .spawn(async move {
+                let history = task.await;
+                let _ = this.update(&mut async_cx, |console, cx| {
+                    console.history = match history {
+                        Ok(history) => HistoryState::Ready(history),
+                        Err(_) => HistoryState::Unavailable,
+                    };
+                    cx.notify();
+                });
+            })
+            .detach();
+    }
+
+    fn submit_knowledge_document(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let title = self
+            .knowledge_title_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
+        let content = self
+            .knowledge_content_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
+        if title.is_empty()
+            || content.is_empty()
+            || title.chars().count() > 200
+            || content.chars().count() > 20_000
+        {
+            self.knowledge_submission = KnowledgeSubmissionState::Invalid;
+            cx.notify();
+            return;
+        }
+        self.knowledge_submission = KnowledgeSubmissionState::Saving;
+        let api_base_url = self.api_base_url.clone();
+        let (sender, receiver) = async_channel::bounded(1);
+        cx.background_executor()
+            .spawn(async move {
+                let result = OpsMindApiClient::new(api_base_url)
+                    .create_knowledge_document(&CreateKnowledgeDocumentRequest { title, content });
+                let _ = sender.send_blocking(result);
+            })
+            .detach();
+        let this = cx.weak_entity();
+        let mut async_cx = cx.to_async();
+        cx.foreground_executor()
+            .spawn(async move {
+                if let Ok(result) = receiver.recv().await {
+                    let _ = this.update(&mut async_cx, |console, cx| match result {
+                        Ok(catalog) => {
+                            console.knowledge_catalog = KnowledgeCatalogState::Ready(catalog);
+                            console.knowledge_submission = KnowledgeSubmissionState::Saved;
+                            cx.notify();
+                        }
+                        Err(_) => {
+                            console.knowledge_submission = KnowledgeSubmissionState::Failed;
+                            cx.notify();
+                        }
+                    });
+                }
+            })
+            .detach();
+    }
+
+    fn download_report(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.report_download = match self.final_answer().map(save_report_to_downloads) {
+            Some(Ok(())) => ReportDownloadState::Saved,
+            _ => ReportDownloadState::Failed,
+        };
         cx.notify();
     }
 
@@ -938,18 +1061,9 @@ fn is_safe_trajectory_event(event_name: &str) -> bool {
     )
 }
 
-fn load_bootstrap_snapshot(api_base_url: String) -> Result<BootstrapSnapshot, ()> {
-    let client = OpsMindApiClient::new(api_base_url);
-    let _health = client.health().map_err(|_| ())?;
-    let scenarios = client.scenarios().map_err(|_| ())?;
-
-    Ok(BootstrapSnapshot {
-        scenario_count: scenarios.len(),
-    })
-}
-
 impl Render for OpsMindConsole {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let report_download_detail = report_download_detail(&self.report_download);
         let (page_title, page_description) = match self.page {
             WorkspacePage::Investigation => {
                 ("诊断", "输入问题现象，系统将协助收集信息并给出分析结论。")
@@ -1021,7 +1135,7 @@ impl Render for OpsMindConsole {
                     .flex()
                     .flex_1()
                     .overflow_hidden()
-                    .child(workbench_sidebar(&self.catalog_detail(), self.page, cx))
+                    .child(workbench_sidebar(self.page, cx))
                     .child(
                         div()
                             .id("main-workspace-scroll")
@@ -1045,17 +1159,7 @@ impl Render for OpsMindConsole {
                                             .flex()
                                             .items_center()
                                             .gap(px(10.0))
-                                            .child(div().text_size(px(12.0)).child(page_title))
-                                            .child(
-                                                div()
-                                                    .px(px(8.0))
-                                                    .py(px(3.0))
-                                                    .rounded(px(999.0))
-                                                    .bg(rgb(0xdcebF4))
-                                                    .text_size(px(10.0))
-                                                    .text_color(rgb(0x4f829c))
-                                                    .child("新建"),
-                                            ),
+                                            .child(div().text_size(px(12.0)).child(page_title)),
                                     )
                                     .child(
                                         div()
@@ -1065,23 +1169,16 @@ impl Render for OpsMindConsole {
                                     ),
                             )
                             .child(
-                                div()
-                                    .flex()
-                                    .justify_between()
-                                    .items_end()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap(px(6.0))
-                                            .child(div().text_xl().child(page_title))
-                                            .child(
-                                                div()
-                                                    .text_color(rgb(0x697783))
-                                                    .child(page_description),
-                                            ),
-                                    )
-                                    .child(div().text_color(rgb(0x5a8da7)).child("未命名")),
+                                div().flex().justify_between().items_end().child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(6.0))
+                                        .child(div().text_xl().child(page_title))
+                                        .child(
+                                            div().text_color(rgb(0x697783)).child(page_description),
+                                        ),
+                                ),
                             )
                             .when(self.page == WorkspacePage::Investigation, |this| {
                                 this.child(
@@ -1280,17 +1377,26 @@ impl Render for OpsMindConsole {
                                 )
                                 .when_some(
                                     self.final_answer().map(str::to_owned),
-                                    |this, answer: String| this.child(report_panel(&answer)),
+                                    |this, answer: String| {
+                                        this.child(report_panel(
+                                            &answer,
+                                            report_download_detail,
+                                            cx,
+                                        ))
+                                    },
                                 )
                             })
                             .when(self.page == WorkspacePage::Knowledge, |this| {
-                                this.child(knowledge_catalog_panel(&self.knowledge_catalog))
+                                this.child(knowledge_catalog_panel(
+                                    &self.knowledge_catalog,
+                                    &self.knowledge_title_input,
+                                    &self.knowledge_content_input,
+                                    &self.knowledge_submission,
+                                    cx,
+                                ))
                             })
                             .when(self.page == WorkspacePage::History, |this| {
-                                this.child(workspace_empty_state(
-                                    "暂无历史记录",
-                                    "完成一次诊断后，记录会显示在这里。",
-                                ))
+                                this.child(history_panel(&self.history))
                             }),
                     )
                     .child(trajectory_panel(
@@ -1303,11 +1409,7 @@ impl Render for OpsMindConsole {
     }
 }
 
-fn workbench_sidebar(
-    catalog_detail: &str,
-    page: WorkspacePage,
-    cx: &mut Context<OpsMindConsole>,
-) -> impl IntoElement {
+fn workbench_sidebar(page: WorkspacePage, cx: &mut Context<OpsMindConsole>) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -1343,29 +1445,6 @@ fn workbench_sidebar(
                 .child(
                     workbench_nav_item("nav-history", "历史记录", page == WorkspacePage::History)
                         .on_click(cx.listener(OpsMindConsole::show_history)),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .text_size(px(10.0))
-                        .text_color(rgb(0x75818d))
-                        .child("可选场景"),
-                )
-                .child(
-                    div()
-                        .p(px(12.0))
-                        .rounded(px(8.0))
-                        .bg(rgba(0xffffff7a))
-                        .border_1()
-                        .border_color(rgba(0xffffffb8))
-                        .text_size(px(12.0))
-                        .text_color(rgb(0x5c6975))
-                        .child(catalog_detail.to_owned()),
                 ),
         )
         .child(
@@ -1416,22 +1495,13 @@ fn workbench_nav_item(
         .child(label)
 }
 
-fn workspace_empty_state(title: &'static str, detail: &'static str) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .p(px(32.0))
-        .gap(px(10.0))
-        .rounded(px(14.0))
-        .bg(rgba(0xffffff8f))
-        .border_1()
-        .border_color(rgba(0xffffffb8))
-        .child(div().text_xl().text_color(rgb(0x4f829c)).child(title))
-        .child(div().text_color(rgb(0x697783)).child(detail))
-}
-
-fn knowledge_catalog_panel(catalog: &KnowledgeCatalogState) -> gpui::Div {
+fn knowledge_catalog_panel(
+    catalog: &KnowledgeCatalogState,
+    title_input: &Entity<InputState>,
+    content_input: &Entity<InputState>,
+    submission: &KnowledgeSubmissionState,
+    cx: &mut Context<OpsMindConsole>,
+) -> gpui::Div {
     let mut panel = div()
         .flex()
         .flex_col()
@@ -1440,7 +1510,39 @@ fn knowledge_catalog_panel(catalog: &KnowledgeCatalogState) -> gpui::Div {
         .rounded(px(14.0))
         .bg(rgba(0xffffff8f))
         .border_1()
-        .border_color(rgba(0xffffffb8));
+        .border_color(rgba(0xffffffb8))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .p(px(14.0))
+                .rounded(px(10.0))
+                .bg(rgba(0xe3f1f8a8))
+                .child(div().text_color(rgb(0x4f829c)).child("新增知识"))
+                .child(Input::new(title_input).h(px(34.0)))
+                .child(Input::new(content_input).h(px(110.0)))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(rgb(0x697783))
+                                .child(knowledge_submission_detail(submission)),
+                        )
+                        .child(
+                            Button::new("create-knowledge-document")
+                                .label("保存到知识库")
+                                .primary()
+                                .loading(matches!(submission, KnowledgeSubmissionState::Saving))
+                                .disabled(matches!(submission, KnowledgeSubmissionState::Saving))
+                                .on_click(cx.listener(OpsMindConsole::submit_knowledge_document)),
+                        ),
+                ),
+        );
 
     match catalog {
         KnowledgeCatalogState::Loading => {
@@ -1517,6 +1619,81 @@ fn knowledge_catalog_panel(catalog: &KnowledgeCatalogState) -> gpui::Div {
     }
 
     panel
+}
+
+fn knowledge_submission_detail(submission: &KnowledgeSubmissionState) -> &'static str {
+    match submission {
+        KnowledgeSubmissionState::Draft => "支持 Markdown，保存后可立即用于诊断。",
+        KnowledgeSubmissionState::Invalid => "请填写标题和内容。",
+        KnowledgeSubmissionState::Saving => "正在保存并更新知识库。",
+        KnowledgeSubmissionState::Saved => "已保存，可用于后续诊断。",
+        KnowledgeSubmissionState::Failed => "暂时无法保存，请确认知识服务已配置。",
+    }
+}
+
+fn history_panel(history: &HistoryState) -> gpui::Div {
+    let mut panel = div()
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .p(px(20.0))
+        .rounded(px(14.0))
+        .bg(rgba(0xffffff8f))
+        .border_1()
+        .border_color(rgba(0xffffffb8))
+        .child(div().text_color(rgb(0x4f829c)).child("诊断历史"));
+
+    match history {
+        HistoryState::Loading => {
+            panel = panel.child(div().text_color(rgb(0x697783)).child("正在读取历史记录…"));
+        }
+        HistoryState::Unavailable => {
+            panel = panel.child(
+                div()
+                    .text_color(rgb(0xc76a62))
+                    .child("暂时无法读取历史记录，请确认服务已启动。"),
+            );
+        }
+        HistoryState::Ready(history) if history.runs.is_empty() => {
+            panel = panel.child(
+                div()
+                    .text_color(rgb(0x697783))
+                    .child("还没有诊断记录。完成一次分析后会显示在这里。"),
+            );
+        }
+        HistoryState::Ready(history) => {
+            for run in &history.runs {
+                panel = panel.child(history_item_panel(run));
+            }
+        }
+    }
+    panel
+}
+
+fn history_item_panel(run: &DiagnosisRunHistoryItem) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(5.0))
+        .p(px(14.0))
+        .rounded(px(10.0))
+        .bg(rgba(0xffffffa3))
+        .border_1()
+        .border_color(rgba(0xffffffd1))
+        .child(div().text_size(px(13.0)).child(run.query.clone()))
+        .child(
+            div()
+                .text_size(px(11.0))
+                .text_color(rgb(0x697783))
+                .child(format!(
+                    "{} · {} 个步骤",
+                    run.status
+                        .as_deref()
+                        .map(status_label)
+                        .unwrap_or("状态未知"),
+                    run.step_count
+                )),
+        )
 }
 
 fn panel(title: &'static str, detail: &str) -> impl IntoElement {
@@ -1635,7 +1812,11 @@ fn trajectory_panel(
     panel
 }
 
-fn report_panel(answer: &str) -> impl IntoElement {
+fn report_panel(
+    answer: &str,
+    download_detail: &'static str,
+    cx: &mut Context<OpsMindConsole>,
+) -> impl IntoElement {
     let mut panel = div()
         .flex()
         .flex_col()
@@ -1645,12 +1826,49 @@ fn report_panel(answer: &str) -> impl IntoElement {
         .bg(rgba(0xffffffa3))
         .border_1()
         .border_color(rgba(0xffffffd1))
-        .child(div().text_color(rgb(0x4f829c)).child("分析结论"));
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(div().text_color(rgb(0x4f829c)).child("分析结论"))
+                .child(
+                    Button::new("download-diagnosis-report")
+                        .label("下载 Markdown")
+                        .on_click(cx.listener(OpsMindConsole::download_report)),
+                ),
+        )
+        .child(
+            div()
+                .text_size(px(11.0))
+                .text_color(rgb(0x697783))
+                .child(download_detail),
+        );
 
     for line in answer.lines().filter(|line| !line.trim().is_empty()) {
         panel = panel.child(div().text_size(px(13.0)).child(line.to_owned()));
     }
     panel
+}
+
+fn report_download_detail(state: &ReportDownloadState) -> &'static str {
+    match state {
+        ReportDownloadState::Idle => "可将本次分析保存为 Markdown 文档。",
+        ReportDownloadState::Saved => "已保存到“下载”文件夹。",
+        ReportDownloadState::Failed => "保存失败，请检查本机“下载”文件夹权限。",
+    }
+}
+
+fn save_report_to_downloads(report: &str) -> Result<(), ()> {
+    let home_directory = env::var_os("HOME").map(PathBuf::from).ok_or(())?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| ())?
+        .as_secs();
+    let path = home_directory
+        .join("Downloads")
+        .join(format!("OpsMind-诊断报告-{timestamp}.md"));
+    fs::write(path, report).map_err(|_| ())
 }
 
 fn intervention_panel(title: &'static str, detail: String) -> gpui::Div {

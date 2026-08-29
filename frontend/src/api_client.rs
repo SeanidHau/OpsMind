@@ -16,16 +16,6 @@ pub struct HealthStatus {
     pub version: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ScenarioSummary {
-    pub scenario_id: String,
-    pub service: String,
-    pub log_count: u32,
-    pub metric_names: Vec<String>,
-    pub dependency_count: u32,
-}
-
 /// 工作台知识库页面展示的最小文档信息。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -41,6 +31,27 @@ pub struct KnowledgeCatalog {
     pub document_count: usize,
     pub chunk_count: usize,
     pub documents: Vec<KnowledgeDocumentSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CreateKnowledgeDocumentRequest {
+    pub title: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosisRunHistoryItem {
+    pub run_id: String,
+    pub status: Option<String>,
+    pub step_count: usize,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosisRunHistory {
+    pub runs: Vec<DiagnosisRunHistoryItem>,
 }
 
 /// 创建一次实时诊断运行所需的公开请求字段。
@@ -147,14 +158,20 @@ impl OpsMindApiClient {
         })
     }
 
-    /// 读取可公开展示的场景摘要，不请求任何原始诊断证据。
-    pub fn scenarios(&self) -> Result<Vec<ScenarioSummary>, ApiClientError> {
-        self.get_json("/scenarios")
-    }
-
     /// 读取知识库目录，仅用于展示已加载的文档概览。
     pub fn knowledge_catalog(&self) -> Result<KnowledgeCatalog, ApiClientError> {
         self.get_json("/knowledge")
+    }
+
+    pub fn create_knowledge_document(
+        &self,
+        request: &CreateKnowledgeDocumentRequest,
+    ) -> Result<KnowledgeCatalog, ApiClientError> {
+        self.post_json("/knowledge", request)
+    }
+
+    pub fn run_history(&self) -> Result<DiagnosisRunHistory, ApiClientError> {
+        self.get_json("/runs")
     }
 
     /// 创建诊断运行，并在读取到每个完整 SSE 事件时立即回调。
@@ -408,26 +425,6 @@ mod tests {
                 .recv()
                 .expect("captured request")
                 .starts_with("GET /api/v1/health HTTP/1.1")
-        );
-    }
-
-    #[test]
-    fn reads_only_scenario_summaries() {
-        let (base_url, requests) = serve_once(
-            r#"[{"scenario_id":"checkout-latency","service":"checkout","log_count":2,"metric_names":["latency_p95"],"dependency_count":1}]"#,
-        );
-
-        let scenarios = OpsMindApiClient::new(base_url)
-            .scenarios()
-            .expect("scenario catalog");
-
-        assert_eq!(scenarios[0].service, "checkout");
-        assert_eq!(scenarios[0].metric_names, ["latency_p95"]);
-        assert!(
-            requests
-                .recv()
-                .expect("captured request")
-                .starts_with("GET /api/v1/scenarios HTTP/1.1")
         );
     }
 

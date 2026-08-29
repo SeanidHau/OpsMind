@@ -41,6 +41,25 @@ class DiagnosisRunResponse(BaseModel):
     errors: list[str]
 
 
+class DiagnosisRunHistoryItem(BaseModel):
+    """历史列表所需的最小安全运行摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID
+    status: HarnessStatus | None
+    step_count: int = Field(ge=0)
+    query: str = Field(min_length=1, max_length=200)
+
+
+class DiagnosisRunHistoryResponse(BaseModel):
+    """按最新优先返回的有限历史记录。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    runs: list[DiagnosisRunHistoryItem]
+
+
 class DiagnosisTrajectoryEventResponse(BaseModel):
     """诊断轨迹中可安全公开的一条审计事件。"""
 
