@@ -8,8 +8,19 @@ class KnowledgeDocumentSummary(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    document_id: str = Field(min_length=1, max_length=200)
     title: str = Field(min_length=1, max_length=200)
     chunk_count: int = Field(ge=0)
+
+
+class KnowledgeDocumentResponse(BaseModel):
+    """一份可在工作台阅读的 Markdown 知识正文。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=20_000)
 
 
 class KnowledgeCatalogResponse(BaseModel):

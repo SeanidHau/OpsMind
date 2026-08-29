@@ -8,11 +8,12 @@ from fastapi import APIRouter, HTTPException, Request, status
 from app.api.schemas.knowledge import (
     CreateKnowledgeDocumentRequest,
     KnowledgeCatalogResponse,
+    KnowledgeDocumentResponse,
     KnowledgeDocumentSummary,
 )
 from app.config import Settings
 from app.models.contracts import KnowledgeDocument
-from app.rag.documents import load_markdown_chunks
+from app.rag.documents import MarkdownKnowledgeLoader, load_markdown_chunks
 from app.rag.search import KnowledgeSearcher
 
 router = APIRouter(prefix="/api/v1", tags=["knowledge"])
@@ -41,6 +42,7 @@ def catalog_from_directory(directory: Path) -> KnowledgeCatalogResponse:
         existing = documents.get(chunk.source_id)
         if existing is None:
             documents[chunk.source_id] = KnowledgeDocumentSummary(
+                document_id=chunk.source_id,
                 title=chunk.metadata.get("title", chunk.source_id),
                 chunk_count=1,
             )
@@ -52,6 +54,38 @@ def catalog_from_directory(directory: Path) -> KnowledgeCatalogResponse:
         document_count=len(summaries),
         chunk_count=len(chunks),
         documents=summaries,
+    )
+
+
+@router.get(
+    "/knowledge/{document_id}",
+    response_model=KnowledgeDocumentResponse,
+    status_code=status.HTTP_200_OK,
+    summary="查看知识文档",
+)
+async def get_knowledge_document(document_id: str, request: Request) -> KnowledgeDocumentResponse:
+    """读取一份 Markdown 正文，拒绝目录穿越和未知文档。"""
+    settings = request.app.state.settings
+    if not isinstance(settings, Settings):
+        raise RuntimeError("application settings are not configured")
+    safe_identifier = document_id.replace("-", "").replace("_", "")
+    if not document_id or len(document_id) > 200 or not safe_identifier.isalnum():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="knowledge document not found",
+        )
+
+    path = settings.knowledge_source_directory / f"{document_id}.md"
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="knowledge document not found",
+        )
+    document = MarkdownKnowledgeLoader().load(path)
+    return KnowledgeDocumentResponse(
+        document_id=document.source_id,
+        title=document.metadata.get("title", document.source_id),
+        content=document.content,
     )
 
 

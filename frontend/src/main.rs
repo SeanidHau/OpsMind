@@ -24,7 +24,7 @@ use crate::{
     api_client::{
         ApiClientError, ApprovalRequest, CreateKnowledgeDocumentRequest, DiagnosisRunHistory,
         DiagnosisRunHistoryItem, DiagnosisRunSummary, HealthStatus, KnowledgeCatalog,
-        OpsMindApiClient, ResumeDiagnosisRequest, StreamDiagnosisRequest,
+        KnowledgeDocument, OpsMindApiClient, ResumeDiagnosisRequest, StreamDiagnosisRequest,
     },
     sse::ServerSentEvent,
 };
@@ -39,6 +39,7 @@ struct OpsMindConsole {
     thread_id: String,
     connection: ConnectionState,
     knowledge_catalog: KnowledgeCatalogState,
+    selected_knowledge_document: SelectedKnowledgeDocumentState,
     history: HistoryState,
     diagnosis_input: Entity<InputState>,
     operator_input: Entity<InputState>,
@@ -77,6 +78,13 @@ enum ConnectionState {
 enum KnowledgeCatalogState {
     Loading,
     Ready(KnowledgeCatalog),
+    Unavailable,
+}
+
+enum SelectedKnowledgeDocumentState {
+    None,
+    Loading { title: String },
+    Ready(KnowledgeDocument),
     Unavailable,
 }
 
@@ -229,6 +237,7 @@ impl OpsMindConsole {
             thread_id: desktop_identifier("thread"),
             connection: ConnectionState::Checking,
             knowledge_catalog: KnowledgeCatalogState::Loading,
+            selected_knowledge_document: SelectedKnowledgeDocumentState::None,
             history: HistoryState::Loading,
             diagnosis_input,
             operator_input,
@@ -327,6 +336,33 @@ impl OpsMindConsole {
         self.page = WorkspacePage::Knowledge;
         self.refresh_knowledge_catalog(cx);
         cx.notify();
+    }
+
+    fn show_knowledge_document(
+        &mut self,
+        document_id: String,
+        title: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.selected_knowledge_document = SelectedKnowledgeDocumentState::Loading { title };
+        let api_base_url = self.api_base_url.clone();
+        let task = cx.background_executor().spawn(async move {
+            OpsMindApiClient::new(api_base_url).knowledge_document(&document_id)
+        });
+        let this = cx.weak_entity();
+        let mut async_cx = cx.to_async();
+        cx.foreground_executor()
+            .spawn(async move {
+                let document = task.await;
+                let _ = this.update(&mut async_cx, |console, cx| {
+                    console.selected_knowledge_document = match document {
+                        Ok(document) => SelectedKnowledgeDocumentState::Ready(document),
+                        Err(_) => SelectedKnowledgeDocumentState::Unavailable,
+                    };
+                    cx.notify();
+                });
+            })
+            .detach();
     }
 
     fn show_history(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -1389,6 +1425,7 @@ impl Render for OpsMindConsole {
                             .when(self.page == WorkspacePage::Knowledge, |this| {
                                 this.child(knowledge_catalog_panel(
                                     &self.knowledge_catalog,
+                                    &self.selected_knowledge_document,
                                     &self.knowledge_title_input,
                                     &self.knowledge_content_input,
                                     &self.knowledge_submission,
@@ -1497,6 +1534,7 @@ fn workbench_nav_item(
 
 fn knowledge_catalog_panel(
     catalog: &KnowledgeCatalogState,
+    selected_document: &SelectedKnowledgeDocumentState,
     title_input: &Entity<InputState>,
     content_input: &Entity<InputState>,
     submission: &KnowledgeSubmissionState,
@@ -1595,9 +1633,12 @@ fn knowledge_catalog_panel(
                             .child("可用于诊断"),
                     ),
             );
-            for document in &catalog.documents {
+            for (index, document) in catalog.documents.iter().enumerate() {
+                let document_id = document.document_id.clone();
+                let title = document.title.clone();
                 panel = panel.child(
                     div()
+                        .id(("knowledge-document", index))
                         .flex()
                         .items_center()
                         .justify_between()
@@ -1606,6 +1647,11 @@ fn knowledge_catalog_panel(
                         .bg(rgba(0xffffffa3))
                         .border_1()
                         .border_color(rgba(0xffffffd1))
+                        .cursor_pointer()
+                        .hover(|this| this.bg(rgba(0xe3f1f8c7)))
+                        .on_click(cx.listener(move |console, _, _, cx| {
+                            console.show_knowledge_document(document_id.clone(), title.clone(), cx);
+                        }))
                         .child(div().text_size(px(13.0)).child(document.title.clone()))
                         .child(
                             div()
@@ -1618,6 +1664,60 @@ fn knowledge_catalog_panel(
         }
     }
 
+    panel = panel.child(selected_knowledge_document_panel(selected_document));
+
+    panel
+}
+
+fn selected_knowledge_document_panel(state: &SelectedKnowledgeDocumentState) -> gpui::Div {
+    let mut panel = div()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .p(px(16.0))
+        .rounded(px(10.0))
+        .bg(rgba(0xffffffa3))
+        .border_1()
+        .border_color(rgba(0xffffffd1));
+
+    match state {
+        SelectedKnowledgeDocumentState::None => {
+            panel = panel.child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(rgb(0x697783))
+                    .child("点击已加载的知识，可查看详细内容。"),
+            );
+        }
+        SelectedKnowledgeDocumentState::Loading { title } => {
+            panel = panel.child(
+                div()
+                    .text_color(rgb(0x697783))
+                    .child(format!("正在读取《{title}》…")),
+            );
+        }
+        SelectedKnowledgeDocumentState::Unavailable => {
+            panel = panel.child(
+                div()
+                    .text_color(rgb(0xc76a62))
+                    .child("暂时无法读取该知识文档。"),
+            );
+        }
+        SelectedKnowledgeDocumentState::Ready(document) => {
+            panel = panel.child(
+                div()
+                    .text_color(rgb(0x4f829c))
+                    .child(document.title.clone()),
+            );
+            for line in document
+                .content
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+            {
+                panel = panel.child(div().text_size(px(12.0)).child(line.to_owned()));
+            }
+        }
+    }
     panel
 }
 

@@ -20,8 +20,17 @@ pub struct HealthStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KnowledgeDocumentSummary {
+    pub document_id: String,
     pub title: String,
     pub chunk_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeDocument {
+    pub document_id: String,
+    pub title: String,
+    pub content: String,
 }
 
 /// 知识库目录的安全摘要，不包含正文或向量内容。
@@ -168,6 +177,13 @@ impl OpsMindApiClient {
         request: &CreateKnowledgeDocumentRequest,
     ) -> Result<KnowledgeCatalog, ApiClientError> {
         self.post_json("/knowledge", request)
+    }
+
+    pub fn knowledge_document(
+        &self,
+        document_id: &str,
+    ) -> Result<KnowledgeDocument, ApiClientError> {
+        self.get_json(&format!("/knowledge/{document_id}"))
     }
 
     pub fn run_history(&self) -> Result<DiagnosisRunHistory, ApiClientError> {
@@ -431,7 +447,7 @@ mod tests {
     #[test]
     fn reads_knowledge_catalog_without_document_content() {
         let (base_url, requests) = serve_once(
-            r#"{"document_count":1,"chunk_count":2,"documents":[{"title":"支付处理手册","chunk_count":2}]}"#,
+            r#"{"document_count":1,"chunk_count":2,"documents":[{"document_id":"payment-runbook","title":"支付处理手册","chunk_count":2}]}"#,
         );
 
         let catalog = OpsMindApiClient::new(base_url)
@@ -439,6 +455,7 @@ mod tests {
             .expect("knowledge catalog");
 
         assert_eq!(catalog.document_count, 1);
+        assert_eq!(catalog.documents[0].document_id, "payment-runbook");
         assert_eq!(catalog.documents[0].title, "支付处理手册");
         assert!(
             requests
