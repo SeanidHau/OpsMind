@@ -9,6 +9,7 @@ use crate::sse::{ServerSentEvent, SseDecoder};
 const API_PREFIX: &str = "/api/v1";
 const MAX_RESPONSE_BYTES: u64 = 512 * 1024;
 const MAX_STREAM_BYTES: usize = 1024 * 1024;
+const STREAM_TIMEOUT: Duration = Duration::from_secs(130);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HealthStatus {
@@ -165,8 +166,12 @@ impl OpsMindApiClient {
         let body = serde_json::to_string(request)
             .map_err(|error| ApiClientError::InvalidResponse(error.to_string()))?;
         let url = format!("{}{API_PREFIX}/runs/stream", self.base_url);
-        let mut response = self
-            .agent
+        // 模型调用允许占用完整的 Harness 运行时预算；普通请求仍保持 5 秒超时。
+        let stream_agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(STREAM_TIMEOUT))
+            .build()
+            .into();
+        let mut response = stream_agent
             .post(&url)
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
@@ -302,6 +307,7 @@ mod tests {
         net::TcpListener,
         sync::mpsc::{self, Receiver},
         thread,
+        time::Duration,
     };
 
     use super::{
@@ -324,6 +330,37 @@ mod tests {
             stream
                 .write_all(response.as_bytes())
                 .expect("write response");
+        });
+
+        (format!("http://{address}"), receiver)
+    }
+
+    fn serve_stream_with_delay(
+        initial_body: &str,
+        delayed_body: &str,
+        delay: Duration,
+    ) -> (String, Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let (sender, receiver) = mpsc::channel();
+        let initial_body = initial_body.to_owned();
+        let delayed_body = delayed_body.to_owned();
+
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let _ = sender.send(read_http_request(&mut stream));
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{initial_body}",
+                initial_body.len() + delayed_body.len(),
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write initial stream");
+            stream.flush().expect("flush initial stream");
+            thread::sleep(delay);
+            stream
+                .write_all(delayed_body.as_bytes())
+                .expect("write delayed stream");
         });
 
         (format!("http://{address}"), receiver)
@@ -453,6 +490,32 @@ mod tests {
             request.contains("\"user_query\":\"checkout latency increased\""),
             "unexpected request: {request}"
         );
+    }
+
+    #[test]
+    fn keeps_the_diagnosis_stream_open_for_a_model_response() {
+        let (base_url, _) = serve_stream_with_delay(
+            concat!("event: run_started\n", "data: {\"run_id\":\"run-1\"}\n\n",),
+            concat!(
+                "event: model_called\n",
+                "data: {\"event_type\":\"model_called\"}\n\n",
+            ),
+            Duration::from_secs(6),
+        );
+        let mut event_names = Vec::new();
+
+        OpsMindApiClient::new(base_url)
+            .stream_diagnosis(
+                &StreamDiagnosisRequest {
+                    session_id: String::from("desktop-session"),
+                    thread_id: String::from("desktop-thread"),
+                    user_query: String::from("checkout latency increased"),
+                },
+                |event| event_names.push(event.name),
+            )
+            .expect("stream remains open past the ordinary request timeout");
+
+        assert_eq!(event_names, ["run_started", "model_called"]);
     }
 
     #[test]
