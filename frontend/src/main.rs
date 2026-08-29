@@ -567,6 +567,73 @@ impl OpsMindConsole {
         self.persist_mcp_configuration(Some(enabled), cx);
     }
 
+    fn load_current_configuration(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let McpConfigurationState::Ready(configuration) = &self.mcp_configuration else {
+            return;
+        };
+        set_input_value(
+            &self.llm_provider_input,
+            configuration.model.llm_provider.as_deref().unwrap_or(""),
+            window,
+            cx,
+        );
+        set_input_value(
+            &self.llm_model_input,
+            configuration.model.llm_model.as_deref().unwrap_or(""),
+            window,
+            cx,
+        );
+        set_input_value(
+            &self.llm_base_url_input,
+            configuration.model.llm_base_url.as_deref().unwrap_or(""),
+            window,
+            cx,
+        );
+        set_input_value(
+            &self.embedding_model_input,
+            configuration.model.embedding_model.as_deref().unwrap_or(""),
+            window,
+            cx,
+        );
+        set_input_value(
+            &self.embedding_base_url_input,
+            configuration
+                .model
+                .embedding_base_url
+                .as_deref()
+                .unwrap_or(""),
+            window,
+            cx,
+        );
+        set_input_value(
+            &self.embedding_vector_size_input,
+            &configuration.model.embedding_vector_size.to_string(),
+            window,
+            cx,
+        );
+        for (input, url) in [
+            (
+                &self.mcp_prometheus_url_input,
+                &configuration.prometheus.url,
+            ),
+            (&self.mcp_loki_url_input, &configuration.loki.url),
+            (&self.mcp_jaeger_url_input, &configuration.jaeger.url),
+            (
+                &self.mcp_kubernetes_url_input,
+                &configuration.kubernetes.url,
+            ),
+            (&self.mcp_cmdb_url_input, &configuration.cmdb.url),
+        ] {
+            set_input_value(input, url.as_deref().unwrap_or(""), window, cx);
+        }
+        cx.notify();
+    }
+
     fn persist_mcp_configuration(&mut self, enabled: Option<bool>, cx: &mut Context<Self>) {
         let configuration = match &self.mcp_configuration {
             McpConfigurationState::Ready(configuration) => configuration.clone(),
@@ -1220,14 +1287,25 @@ impl OpsMindConsole {
                             ),
                     )
                     .child(
-                        Button::new("toggle-mcp")
-                            .label(if self.mcp_is_enabled() {
-                                "已启用"
-                            } else {
-                                "未启用"
-                            })
-                            .disabled(self.mcp_is_saving() || !self.backend_is_ready())
-                            .on_click(cx.listener(Self::toggle_mcp_configuration)),
+                        div()
+                            .flex()
+                            .gap(px(8.0))
+                            .child(
+                                Button::new("load-current-configuration")
+                                    .label("载入当前配置")
+                                    .disabled(self.mcp_is_saving() || !self.backend_is_ready())
+                                    .on_click(cx.listener(Self::load_current_configuration)),
+                            )
+                            .child(
+                                Button::new("toggle-mcp")
+                                    .label(if self.mcp_is_enabled() {
+                                        "已启用"
+                                    } else {
+                                        "未启用"
+                                    })
+                                    .disabled(self.mcp_is_saving() || !self.backend_is_ready())
+                                    .on_click(cx.listener(Self::toggle_mcp_configuration)),
+                            ),
                     ),
             );
 
@@ -1321,6 +1399,16 @@ impl OpsMindConsole {
         }
         panel
     }
+}
+
+fn set_input_value(
+    input: &Entity<InputState>,
+    value: &str,
+    window: &mut Window,
+    cx: &mut Context<OpsMindConsole>,
+) {
+    let value = value.to_owned();
+    input.update(cx, |state, cx| state.set_value(value, window, cx));
 }
 
 fn normalize_diagnosis_query(raw_query: &str) -> Result<String, ()> {
@@ -2185,10 +2273,17 @@ fn model_configuration_form(
                 .text_size(px(11.0))
                 .text_color(rgb(0x697783))
                 .child(format!(
-                    "当前模型：{} · {}",
+                    "当前模型：{} · {} · {}",
                     configuration.llm_provider.as_deref().unwrap_or("未配置"),
                     configuration.llm_model.as_deref().unwrap_or("未配置"),
+                    configuration.llm_base_url.as_deref().unwrap_or("默认地址"),
                 )),
+        )
+        .child(
+            div()
+                .text_size(px(10.0))
+                .text_color(rgb(0x75818d))
+                .child("点击“载入当前配置”可将以上非敏感值写入编辑框。"),
         )
         .child(Input::new(llm_provider_input).h(px(34.0)))
         .child(Input::new(llm_model_input).h(px(34.0)))
@@ -2207,9 +2302,13 @@ fn model_configuration_form(
                 .text_size(px(11.0))
                 .text_color(rgb(0x5a8da7))
                 .child(format!(
-                    "当前 Embedding：{} · {} 维",
+                    "当前 Embedding：{} · {} 维 · {}",
                     configuration.embedding_model.as_deref().unwrap_or("未配置"),
                     configuration.embedding_vector_size,
+                    configuration
+                        .embedding_base_url
+                        .as_deref()
+                        .unwrap_or("默认地址"),
                 )),
         )
         .child(Input::new(embedding_model_input).h(px(34.0)))
