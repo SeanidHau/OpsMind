@@ -73,10 +73,10 @@ def test_mcp_configuration_can_be_saved_without_returning_tokens(tmp_path) -> No
     assert "model-secret" not in catalog.text
     assert "read-only-token" in configuration_path.read_text(encoding="utf-8")
     assert "model-secret" in configuration_path.read_text(encoding="utf-8")
-    assert {item["name"] for item in tools.json()} >= {
-        "query_prometheus",
+    assert "query_prometheus" in {item["name"] for item in tools.json()}
+    assert not {
         "query_loki",
         "query_jaeger",
         "query_kubernetes",
         "query_cmdb",
-    }
+    } & {item["name"] for item in tools.json()}

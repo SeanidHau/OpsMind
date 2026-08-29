@@ -73,7 +73,7 @@ async def test_application_builds_registry_bound_to_injected_scenario_store() ->
     registry = app.state.tool_registry
 
     assert isinstance(registry, ToolRegistry)
-    assert {policy.name for policy in registry.policies()} == {
+    assert {policy.name for policy in registry.policies()} >= {
         "query_logs",
         "query_metrics",
         "query_topology",

@@ -63,3 +63,19 @@ async def test_mcp_adapter_keeps_kubernetes_queries_read_only_and_bounded() -> N
     definition = next(item for item in registry.definitions() if item.name == "query_kubernetes")
     assert definition.read_only is True
     assert definition.max_calls_per_run == 2
+
+
+def test_mcp_adapter_only_registers_configured_tools() -> None:
+    """未配置的数据源不应成为模型可选工具。"""
+
+    async def invoke(_: str, __: dict[str, Any]) -> dict[str, Any]:
+        return {}
+
+    registry = ToolRegistry()
+    register_mcp_observability_tools(
+        registry,
+        invoke,
+        available_tools={"query_prometheus"},
+    )
+
+    assert [definition.name for definition in registry.definitions()] == ["query_prometheus"]

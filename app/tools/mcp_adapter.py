@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shlex
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Collection
 from typing import Any, Protocol
 
 from mcp import ClientSession, StdioServerParameters
@@ -53,8 +53,13 @@ class StdioMcpToolInvoker:
         return {"content": [item.model_dump(mode="json") for item in result.content]}
 
 
-def register_mcp_observability_tools(registry: ToolRegistry, invoker: McpToolInvoker) -> None:
-    """注册经 MCP 调用的五个受限、只读观测工具。"""
+def register_mcp_observability_tools(
+    registry: ToolRegistry,
+    invoker: McpToolInvoker,
+    *,
+    available_tools: Collection[str] | None = None,
+) -> None:
+    """注册已配置的受限、只读 MCP 观测工具。"""
 
     definitions = (
         ToolDefinition(
@@ -104,7 +109,10 @@ def register_mcp_observability_tools(registry: ToolRegistry, invoker: McpToolInv
         ),
     )
 
+    available_tool_names = set(available_tools) if available_tools is not None else None
     for definition in definitions:
+        if available_tool_names is not None and definition.name not in available_tool_names:
+            continue
 
         async def handler(
             args: dict[str, Any], *, tool_name: str = definition.name

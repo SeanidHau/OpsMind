@@ -1,5 +1,7 @@
 """应用配置与 FastAPI 配置注入的验收测试。"""
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -16,6 +18,7 @@ def make_settings(**overrides: object) -> Settings:
         "database_url": "postgresql+asyncpg://opsmind:password@localhost:5432/opsmind",
         "run_archive_backend": "memory",
         "milvus_url": "http://localhost:19530",
+        "mcp_configuration_path": Path(__file__).with_name("mcp-configuration.test.json"),
     }
     return Settings(_env_file=None, **(defaults | overrides))
 
@@ -81,12 +84,13 @@ def test_run_archive_backend_uses_explicit_configuration() -> None:
     )
 
 
-def test_app_factory_registers_mcp_observability_tools_when_configured() -> None:
-    """MCP 配置启用后，模型只会看到受本地 Adapter 约束的五个只读工具。"""
+def test_app_factory_registers_only_configured_mcp_observability_tools() -> None:
+    """MCP 启用后，模型只会看到已配置地址对应的只读工具。"""
     app = create_app(
         settings=make_settings(
             observability_mcp_command="uv",
             observability_mcp_args="run python -m app.mcp.observability_server",
+            prometheus_url="http://prometheus.example.test:9090",
         )
     )
 
@@ -94,20 +98,11 @@ def test_app_factory_registers_mcp_observability_tools_when_configured() -> None
         definition.name: definition for definition in app.state.tool_registry.definitions()
     }
 
-    assert {
-        "query_prometheus",
+    assert "query_prometheus" in definitions
+    assert definitions["query_prometheus"].read_only is True
+    assert not {
         "query_loki",
         "query_jaeger",
         "query_kubernetes",
         "query_cmdb",
-    } <= set(definitions)
-    assert all(
-        definitions[name].read_only
-        for name in {
-            "query_prometheus",
-            "query_loki",
-            "query_jaeger",
-            "query_kubernetes",
-            "query_cmdb",
-        }
-    )
+    } & set(definitions)

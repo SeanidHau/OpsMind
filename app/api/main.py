@@ -71,12 +71,22 @@ def create_tool_registry(
     tool_registry = ToolRegistry()
     register_scenario_tools(tool_registry, scenario_store)
     if mcp_configuration.enabled:
+        configured_mcp_tools = {
+            "query_prometheus": mcp_configuration.prometheus,
+            "query_loki": mcp_configuration.loki,
+            "query_jaeger": mcp_configuration.jaeger,
+            "query_kubernetes": mcp_configuration.kubernetes,
+            "query_cmdb": mcp_configuration.cmdb,
+        }
         register_mcp_observability_tools(
             tool_registry,
             StdioMcpToolInvoker(
                 command=mcp_configuration.command,
                 arguments=mcp_configuration.arguments,
                 environment=mcp_configuration.server_environment(),
+            ),
+            available_tools=tuple(
+                name for name, service in configured_mcp_tools.items() if service.url is not None
             ),
         )
     elif settings.prometheus_url is not None:

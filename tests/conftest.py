@@ -8,7 +8,7 @@ from app.config import Settings
 
 
 @pytest.fixture
-def isolated_settings() -> Callable[..., Settings]:
+def isolated_settings(tmp_path) -> Callable[..., Settings]:
     """构造不受开发机 `.env` 影响的应用配置。"""
 
     def build(**overrides: object) -> Settings:
@@ -25,6 +25,7 @@ def isolated_settings() -> Callable[..., Settings]:
             "embedding_model": None,
             "embedding_api_key": None,
             "embedding_base_url": None,
+            "mcp_configuration_path": tmp_path / "mcp-configuration.json",
         }
         return Settings(_env_file=None, **(defaults | overrides))
 
