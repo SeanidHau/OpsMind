@@ -25,7 +25,8 @@ def default_budget_template() -> BudgetState:
         max_steps=12,
         max_tool_calls=6,
         max_model_calls=8,
-        max_tokens=16_000,
+        # 默认完整链路需要建计划、四次取证、一次受限纠正和汇总。
+        max_tokens=24_000,
         max_runtime_seconds=120,
         max_estimated_cost_usd=0.1,
     )
@@ -46,6 +47,8 @@ def create_harness_diagnosis_runner(
         tool_executor=tool_registry,
         policy=ActionPolicy(tool_registry.policies()),
         run_archive=run_archive,
+        # 应用运行时允许模型对未执行的重复动作纠正一次；Harness 默认保持严格阻断。
+        max_policy_corrections=1,
         use_context_manager=profile is not HarnessProfile.WITHOUT_CONTEXT_MANAGER,
         use_progress_verifier=profile is not HarnessProfile.WITHOUT_PROGRESS_VERIFIER,
     )

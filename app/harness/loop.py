@@ -150,6 +150,7 @@ class HarnessLoop:
         run_archive: RunArchive | None = None,
         event_observer: HarnessEventObserver | None = None,
         max_replan_corrections: int = 1,
+        max_policy_corrections: int = 0,
         max_replans: int = 2,
         max_user_questions: int = 2,
         replan_on_tool_failure: bool = False,
@@ -166,6 +167,8 @@ class HarnessLoop:
 
         if max_replan_corrections < 0:
             raise ValueError("max_replan_corrections must not be negative")
+        if max_policy_corrections < 0:
+            raise ValueError("max_policy_corrections must not be negative")
         if max_replans < 0:
             raise ValueError("max_replans must not be negative")
         if max_user_questions < 0:
@@ -180,6 +183,7 @@ class HarnessLoop:
         self._max_tool_retries = max_tool_retries
         self._max_model_retries = max_model_retries
         self._max_replan_corrections = max_replan_corrections
+        self._max_policy_corrections = max_policy_corrections
         self._max_replans = max_replans
         self._max_user_questions = max_user_questions
         self._replan_on_tool_failure = replan_on_tool_failure
@@ -458,6 +462,7 @@ class HarnessLoop:
                 "apply_plan": "apply_plan",
                 "ask_user": "ask_user",
                 "execute_tool": "execute_tool",
+                "build_context": "build_context",
                 "finish": "finish",
             },
         )
@@ -835,12 +840,7 @@ class HarnessLoop:
                 action=action,
                 decision=error_text,
             )
-            return {
-                "policy_decision": decision,
-                "terminal_status": HarnessStatus.BLOCKED,
-                "errors": [*state["errors"], error_text],
-                "trajectory": [*state["trajectory"], event],
-            }
+            return self._policy_block_result(state, decision, event)
 
         decision = self._policy.evaluate(
             action,
@@ -870,6 +870,7 @@ class HarnessLoop:
                 "policy_decision": decision,
                 "budget": updated_budget,
                 "step_count": state["step_count"] + 1,
+                **({"replan_feedback": None} if not state.get("replan_requested", False) else {}),
                 **({"plan": updated_plan} if updated_plan is not None else {}),
             }
 
@@ -898,6 +899,30 @@ class HarnessLoop:
             action=action,
             decision=decision.reason,
         )
+        return self._policy_block_result(state, decision, event)
+
+    def _policy_block_result(
+        self,
+        state: DiagnosisState,
+        decision: PolicyDecision,
+        event: AgentEvent,
+    ) -> dict[str, Any]:
+        """仅为未执行的重复/计划冲突提供一次模型纠正机会。"""
+        correction_count = state.get("replan_correction_count", 0) + 1
+        correctable = any(
+            violation == "plan:invalid_action"
+            or violation == "tool:duplicate_call"
+            or violation.startswith("tool:call_limit:")
+            for violation in decision.violations
+        )
+        if correctable and correction_count <= self._max_policy_corrections:
+            return {
+                "policy_decision": decision,
+                "replan_correction_count": correction_count,
+                "replan_feedback": decision.reason,
+                "trajectory": [*state["trajectory"], event],
+            }
+
         return {
             "policy_decision": decision,
             "terminal_status": HarnessStatus.BLOCKED,
@@ -1446,9 +1471,11 @@ class HarnessLoop:
         return "finish" if state.get("terminal_status") is not None else "build_context"
 
     def _route_after_policy(self, state: DiagnosisState) -> str:
-        """将策略决策映射为计划、工具或终止节点。"""
+        """将策略决策映射为计划、工具、纠正或终止节点。"""
         decision = self._require_policy_decision(state)
         if decision.outcome is not PolicyOutcome.ALLOW:
+            if state.get("replan_feedback") is not None and state.get("terminal_status") is None:
+                return "build_context"
             return "finish"
 
         action = self._require_current_action(state)

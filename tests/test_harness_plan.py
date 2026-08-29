@@ -140,6 +140,92 @@ async def test_harness_applies_initial_plan_before_tool_execution() -> None:
 
 
 @pytest.mark.asyncio
+async def test_harness_recovers_when_model_repeats_a_completed_plan_item() -> None:
+    """已完成计划项的重复工具调用应被拒绝，并允许模型改为输出报告。"""
+    item = PlanItem(title="查询指标", rationale="收集诊断证据")
+    provider = QueueActionProvider(
+        [
+            plan_action(items=[item], reason="建立诊断计划。"),
+            AgentAction(
+                action_type=ActionType.CALL_TOOL,
+                intent="查询支付服务延迟",
+                tool_name=TOOL_NAME,
+                reason="收集指标证据。",
+                plan_item_id=item.id,
+            ),
+            AgentAction(
+                action_type=ActionType.CALL_TOOL,
+                intent="重复查询支付服务延迟",
+                tool_name=TOOL_NAME,
+                reason="错误地重复调用已完成计划项。",
+                plan_item_id=item.id,
+            ),
+            final_action(),
+        ]
+    )
+    executor = FixedToolExecutor()
+
+    loop = HarnessLoop(
+        action_provider=provider,
+        tool_executor=executor,
+        policy=ActionPolicy([ToolPolicy(name=TOOL_NAME, risk_level=ToolRiskLevel.LOW)]),
+        max_policy_corrections=1,
+    )
+
+    result = await loop.run(make_state())  # type: ignore[arg-type]
+
+    assert result["terminal_status"] is HarnessStatus.COMPLETED
+    assert provider.calls == 4
+    assert [action.tool_name for action in executor.actions] == [TOOL_NAME]
+    assert result["replan_feedback"] is None
+    assert any(
+        event.event_type is EventType.ACTION_BLOCKED
+        and event.decision == "plan item cannot be started from its current status"
+        for event in result["trajectory"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_harness_recovers_when_model_reaches_a_tool_call_limit() -> None:
+    """达到工具调用上限时，拒绝当前调用并允许模型改为输出报告。"""
+    provider = QueueActionProvider(
+        [
+            AgentAction(
+                action_type=ActionType.CALL_TOOL,
+                intent="查询第一个指标",
+                tool_name=TOOL_NAME,
+                tool_args={"scope": "first"},
+                reason="收集第一条证据。",
+            ),
+            AgentAction(
+                action_type=ActionType.CALL_TOOL,
+                intent="查询第二个指标",
+                tool_name=TOOL_NAME,
+                tool_args={"scope": "second"},
+                reason="错误地超过单工具上限。",
+            ),
+            final_action(),
+        ]
+    )
+    executor = FixedToolExecutor()
+    loop = HarnessLoop(
+        action_provider=provider,
+        tool_executor=executor,
+        policy=ActionPolicy(
+            [ToolPolicy(name=TOOL_NAME, risk_level=ToolRiskLevel.LOW, max_calls_per_run=1)]
+        ),
+        max_policy_corrections=1,
+    )
+
+    result = await loop.run(make_state())  # type: ignore[arg-type]
+
+    assert result["terminal_status"] is HarnessStatus.COMPLETED
+    assert provider.calls == 3
+    assert [action.tool_args for action in executor.actions] == [{"scope": "first"}]
+    assert result["replan_feedback"] is None
+
+
+@pytest.mark.asyncio
 async def test_harness_preserves_versions_when_plan_is_revised() -> None:
     """后续 update_plan 应保留旧版本，并记录 PLAN_REVISED 事件。"""
     first_items = [PlanItem(title="查询接口延迟", rationale="确认症状")]

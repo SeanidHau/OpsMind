@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.api.main import create_app
 from app.diagnosis.runner import HarnessDiagnosisRunner
+from app.diagnosis.runtime import default_budget_template
 from app.harness.evidence import EvidenceCollector
 from app.models.contracts import (
     ActionType,
@@ -61,6 +62,14 @@ class FakeKnowledgeSearcher:
 
     def close(self) -> None:
         pass
+
+
+def test_default_budget_covers_a_complete_standard_diagnosis() -> None:
+    """默认预算应容纳规划、取证和汇总，其他限制仍由 Harness 保留。"""
+    budget = default_budget_template()
+
+    assert budget.max_model_calls == 8
+    assert budget.max_tokens == 24_000
 
 
 def make_scenario_store() -> ScenarioStore:

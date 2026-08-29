@@ -12,6 +12,7 @@ from app.models.contracts import (
     DiagnosisState,
     ModelInvocation,
     ModelUsage,
+    PlanStatus,
     ToolDefinition,
 )
 
@@ -45,12 +46,17 @@ class LangChainActionProvider:
     只有当前上下文无法支持安全诊断时才追问，不要将多个独立问题合并为一次 ask_user。
 
     当 plan_version 为 0 时，先选择 update_plan，并提交 2 到 5 个可执行计划项。
+    当 plan_version 大于 0 时，runnable_plan_item_ids 是唯一可绑定工具或追问动作的
+    计划项列表。不得引用列表外的计划项。若该列表为空且 evidence_ids 非空，必须选择
+    final_answer 汇总证据；不要重复调用工具或更新计划。
     执行 call_tool 或 ask_user 时，优先使用 context 中 plan:<UUID> 形式的 reference
     填写 plan_item_id，使 Harness 能校验依赖和执行状态。
     当 replan_requested 为 true 时，必须先选择 update_plan，说明新证据或停滞原因，
     再选择新的工具路径。只有 update_plan 可以携带 plan 字段。
     replan_feedback 不为空时，上一条动作已被 Harness 拒绝。
-    此时只能提交 update_plan；不要重复被拒绝的工具或最终回答动作。
+    若反馈指出计划项已经 completed、工具已成功执行或工具达到调用上限，不得再次
+    调用该工具：应选择其他 pending 计划项；若没有待执行计划且证据足够，直接选择
+    final_answer。其他反馈必须先选择 update_plan；不要重复被拒绝的工具或最终回答动作。
 
     只有证据足够时才选择 final_answer。final_answer 必须携带 report。
     report 的摘要、候选根因和建议必须基于当前 context；
@@ -118,6 +124,9 @@ class LangChainActionProvider:
             "replan_correction_count": state.get("replan_correction_count", 0),
             "replan_count": state.get("replan_count", 0),
             "question_count": state.get("question_count", 0),
+            # 将 Harness 计算出的可执行计划项显式传给模型，避免其误用已完成计划项。
+            "runnable_plan_item_ids": self._runnable_plan_item_ids(state),
+            "evidence_ids": [str(evidence.evidence_id) for evidence in state["evidence"]],
             "available_tools": self._tools,
         }
         messages: list[BaseMessage] = [
@@ -160,6 +169,20 @@ class LangChainActionProvider:
             action=AgentAction.model_validate(response),
             usage=ModelUsage(),
         )
+
+    @staticmethod
+    def _runnable_plan_item_ids(state: DiagnosisState) -> list[str]:
+        """返回依赖已满足且尚未执行的计划项，作为模型动作的硬边界。"""
+        item_by_id = {item.id: item for item in state["plan"]}
+        return [
+            str(item.id)
+            for item in state["plan"]
+            if item.status is PlanStatus.PENDING
+            and all(
+                item_by_id[dependency_id].status is PlanStatus.COMPLETED
+                for dependency_id in item.depends_on
+            )
+        ]
 
     @staticmethod
     def _as_non_negative_int(value: Any) -> int:

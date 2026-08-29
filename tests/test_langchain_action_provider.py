@@ -16,6 +16,8 @@ from app.models.contracts import (
     ContextSnapshot,
     ContextSource,
     ModelInvocation,
+    PlanItem,
+    PlanStatus,
     ToolDefinition,
     ToolRiskLevel,
 )
@@ -143,12 +145,48 @@ async def test_provider_binds_agent_action_schema_and_uses_model_context() -> No
     assert payload["replan_correction_count"] == 0
     assert payload["replan_count"] == 0
     assert payload["question_count"] == 0
+    assert payload["runnable_plan_item_ids"] == []
+    assert payload["evidence_ids"] == []
     assert "budget" not in payload
     assert "trajectory" not in payload
     assert "final_answer 必须携带 report" in str(messages[0].content)
     assert "evidence:<evidence_id>" in str(messages[0].content)
     assert "update_plan" in str(messages[0].content)
     assert "replan_feedback" in str(messages[0].content)
+    assert "runnable_plan_item_ids" in str(messages[0].content)
+
+
+@pytest.mark.asyncio
+async def test_provider_exposes_only_pending_plan_items_with_ready_dependencies() -> None:
+    """模型只能收到尚未执行且前置条件已满足的计划项。"""
+    model = FakeChatModel(
+        AgentAction(
+            action_type=ActionType.ASK_USER,
+            intent="补充影响范围",
+            reason="当前证据不足。",
+            question="受影响的接口有哪些？",
+        )
+    )
+    state = make_state()
+    completed = PlanItem(
+        title="已完成步骤",
+        rationale="测试状态过滤。",
+        status=PlanStatus.COMPLETED,
+    )
+    runnable = PlanItem(title="可执行步骤", rationale="依赖已经完成。", depends_on=[completed.id])
+    blocked = PlanItem(title="不可执行步骤", rationale="依赖尚未完成。")
+    dependent = PlanItem(
+        title="等待依赖步骤",
+        rationale="依赖尚未完成。",
+        depends_on=[blocked.id],
+    )
+    state["plan"] = [completed, runnable, blocked, dependent]
+    state["plan_version"] = 1
+
+    await LangChainActionProvider(model).propose_action(state)  # type: ignore[arg-type]
+
+    payload = json.loads(str(model.runnable.inputs[0][1].content))
+    assert payload["runnable_plan_item_ids"] == [str(runnable.id), str(blocked.id)]
 
 
 def test_provider_can_use_function_calling_for_compatible_endpoints() -> None:
