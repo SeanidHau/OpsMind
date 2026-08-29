@@ -128,8 +128,9 @@ def create_app(
         finally:
             if isinstance(resolved_run_archive, PostgresRunArchive):
                 await resolved_run_archive.close()
-            if resolved_knowledge_searcher is not None:
-                await asyncio.to_thread(resolved_knowledge_searcher.close)
+            active_knowledge_searcher = app.state.knowledge_searcher
+            if active_knowledge_searcher is not None:
+                await asyncio.to_thread(active_knowledge_searcher.close)
 
     app = FastAPI(
         title="OpsMind API",
@@ -178,20 +179,23 @@ def create_app(
     if diagnosis_runner is None and action_provider is None:
 
         def reconfigure_mcp(configuration: McpConfiguration) -> None:
-            """应用新的本机连接配置，后续诊断立即使用新的工具目录。"""
+            """应用新的本机设置，后续诊断立即使用新的模型与工具目录。"""
             updated_settings = configuration.apply_to_settings(base_settings)
+            updated_knowledge_searcher = create_knowledge_searcher(updated_settings)
             updated_registry = create_tool_registry(
                 settings=updated_settings,
                 scenario_store=app.state.scenario_store,
-                knowledge_searcher=resolved_knowledge_searcher,
+                knowledge_searcher=updated_knowledge_searcher,
                 mcp_configuration=configuration,
             )
             updated_action_provider = create_action_provider(
                 updated_settings,
                 tool_definitions=updated_registry.definitions(),
             )
+            previous_knowledge_searcher = app.state.knowledge_searcher
             app.state.settings = updated_settings
             app.state.mcp_configuration = configuration
+            app.state.knowledge_searcher = updated_knowledge_searcher
             app.state.tool_registry = updated_registry
             app.state.diagnosis_runner = (
                 create_harness_diagnosis_runner(
@@ -203,6 +207,8 @@ def create_app(
                 if updated_action_provider is not None
                 else None
             )
+            if previous_knowledge_searcher is not None:
+                previous_knowledge_searcher.close()
 
         app.state.reconfigure_mcp = reconfigure_mcp
 

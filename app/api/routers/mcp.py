@@ -11,8 +11,14 @@ from app.api.schemas.mcp import (
     McpConfigurationResponse,
     McpConfigurationUpdate,
     McpServiceResponse,
+    ModelConfigurationResponse,
 )
-from app.mcp.configuration import McpConfiguration, McpConfigurationStore, McpServiceConfiguration
+from app.mcp.configuration import (
+    McpConfiguration,
+    McpConfigurationStore,
+    McpServiceConfiguration,
+    ModelConfiguration,
+)
 
 router = APIRouter(prefix="/api/v1/mcp", tags=["mcp"])
 
@@ -35,6 +41,24 @@ def response_from_configuration(configuration: McpConfiguration) -> McpConfigura
         jaeger=service_response(configuration.jaeger),
         kubernetes=service_response(configuration.kubernetes),
         cmdb=service_response(configuration.cmdb),
+        model=ModelConfigurationResponse(
+            llm_provider=configuration.model.llm_provider,
+            llm_model=configuration.model.llm_model,
+            llm_base_url=(
+                str(configuration.model.llm_base_url)
+                if configuration.model.llm_base_url is not None
+                else None
+            ),
+            llm_api_key_configured=configuration.model.llm_api_key is not None,
+            embedding_model=configuration.model.embedding_model,
+            embedding_base_url=(
+                str(configuration.model.embedding_base_url)
+                if configuration.model.embedding_base_url is not None
+                else None
+            ),
+            embedding_api_key_configured=configuration.model.embedding_api_key is not None,
+            embedding_vector_size=configuration.model.embedding_vector_size or 1_536,
+        ),
     )
 
 
@@ -47,6 +71,24 @@ def updated_service(
         {
             "url": normalized_url or current.url,
             "bearer_token": token.strip() or current.bearer_token,
+        }
+    )
+
+
+def updated_model(
+    current: ModelConfiguration, payload: McpConfigurationUpdate
+) -> ModelConfiguration:
+    """空字段保留已有模型配置，避免前端因不回显密钥而意外清空设置。"""
+    return ModelConfiguration.model_validate(
+        {
+            "llm_provider": payload.llm_provider.strip() or current.llm_provider,
+            "llm_model": payload.llm_model.strip() or current.llm_model,
+            "llm_api_key": payload.llm_api_key.strip() or current.llm_api_key,
+            "llm_base_url": payload.llm_base_url.strip() or current.llm_base_url,
+            "embedding_model": payload.embedding_model.strip() or current.embedding_model,
+            "embedding_api_key": payload.embedding_api_key.strip() or current.embedding_api_key,
+            "embedding_base_url": payload.embedding_base_url.strip() or current.embedding_base_url,
+            "embedding_vector_size": payload.embedding_vector_size or current.embedding_vector_size,
         }
     )
 
@@ -88,6 +130,7 @@ async def update_mcp_configuration(
             cmdb=updated_service(
                 current.cmdb, url=payload.cmdb_url, token=payload.cmdb_bearer_token
             ),
+            model=updated_model(current.model, payload),
         )
     except ValidationError as error:
         raise HTTPException(
@@ -102,8 +145,9 @@ async def update_mcp_configuration(
     try:
         reconfigure(configuration)
         cast(McpConfigurationStore, request.app.state.mcp_configuration_store).save(configuration)
-    except OSError as error:
+    except (OSError, ValueError) as error:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="无法保存 MCP 配置"
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="无法应用设置，请检查模型与连接配置",
         ) from error
     return response_from_configuration(configuration)

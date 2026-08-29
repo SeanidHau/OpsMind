@@ -72,6 +72,20 @@ pub struct McpServiceConfiguration {
     pub token_configured: bool,
 }
 
+/// 模型与 Embedding 的安全展示配置；密钥仅提供是否已保存。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelConfiguration {
+    pub llm_provider: Option<String>,
+    pub llm_model: Option<String>,
+    pub llm_base_url: Option<String>,
+    pub llm_api_key_configured: bool,
+    pub embedding_model: Option<String>,
+    pub embedding_base_url: Option<String>,
+    pub embedding_api_key_configured: bool,
+    pub embedding_vector_size: usize,
+}
+
 /// 内置 MCP Server 的本机连接摘要。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -84,6 +98,7 @@ pub struct McpConfiguration {
     pub jaeger: McpServiceConfiguration,
     pub kubernetes: McpServiceConfiguration,
     pub cmdb: McpServiceConfiguration,
+    pub model: ModelConfiguration,
 }
 
 /// 保存 MCP 配置时提交的本机端点与可选只读令牌。
@@ -102,6 +117,14 @@ pub struct McpConfigurationUpdate {
     pub kubernetes_bearer_token: String,
     pub cmdb_url: String,
     pub cmdb_bearer_token: String,
+    pub llm_provider: String,
+    pub llm_model: String,
+    pub llm_api_key: String,
+    pub llm_base_url: String,
+    pub embedding_model: String,
+    pub embedding_api_key: String,
+    pub embedding_base_url: String,
+    pub embedding_vector_size: Option<usize>,
 }
 
 /// 创建一次实时诊断运行所需的公开请求字段。

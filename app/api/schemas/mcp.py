@@ -12,6 +12,21 @@ class McpServiceResponse(BaseModel):
     token_configured: bool
 
 
+class ModelConfigurationResponse(BaseModel):
+    """模型设置的安全展示信息；API 密钥仅提供是否已保存。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    llm_provider: str | None
+    llm_model: str | None
+    llm_base_url: str | None
+    llm_api_key_configured: bool
+    embedding_model: str | None
+    embedding_base_url: str | None
+    embedding_api_key_configured: bool
+    embedding_vector_size: int
+
+
 class McpConfigurationResponse(BaseModel):
     """桌面工作台读取的 MCP 配置摘要。"""
 
@@ -25,6 +40,7 @@ class McpConfigurationResponse(BaseModel):
     jaeger: McpServiceResponse
     kubernetes: McpServiceResponse
     cmdb: McpServiceResponse
+    model: ModelConfigurationResponse
 
 
 class McpConfigurationUpdate(BaseModel):
@@ -45,3 +61,11 @@ class McpConfigurationUpdate(BaseModel):
     kubernetes_bearer_token: str = Field(default="", max_length=4_000)
     cmdb_url: str = Field(default="", max_length=2_000)
     cmdb_bearer_token: str = Field(default="", max_length=4_000)
+    llm_provider: str = Field(default="", max_length=50)
+    llm_model: str = Field(default="", max_length=200)
+    llm_api_key: str = Field(default="", max_length=4_000)
+    llm_base_url: str = Field(default="", max_length=2_000)
+    embedding_model: str = Field(default="", max_length=200)
+    embedding_api_key: str = Field(default="", max_length=4_000)
+    embedding_base_url: str = Field(default="", max_length=2_000)
+    embedding_vector_size: int | None = Field(default=None, gt=0)

@@ -15,6 +15,14 @@ def make_settings(configuration_path: str) -> Settings:
         milvus_url="http://localhost:19530",
         run_archive_backend="memory",
         mcp_configuration_path=configuration_path,
+        llm_provider=None,
+        llm_model=None,
+        llm_api_key=None,
+        llm_base_url=None,
+        embedding_model=None,
+        embedding_api_key=None,
+        embedding_base_url=None,
+        embedding_vector_size=1_536,
     )
 
 
@@ -35,6 +43,10 @@ def test_mcp_configuration_can_be_saved_without_returning_tokens(tmp_path) -> No
         "kubernetes_bearer_token": "",
         "cmdb_url": "",
         "cmdb_bearer_token": "",
+        "llm_provider": "openai",
+        "llm_model": "gpt-4.1-mini",
+        "llm_api_key": "model-secret",
+        "llm_base_url": "",
     }
     with TestClient(create_app(settings=make_settings(str(configuration_path)))) as client:
         response = client.put("/api/v1/mcp", json=payload)
@@ -48,7 +60,19 @@ def test_mcp_configuration_can_be_saved_without_returning_tokens(tmp_path) -> No
         "token_configured": True,
     }
     assert "read-only-token" not in catalog.text
+    assert catalog.json()["model"] == {
+        "llm_provider": "openai",
+        "llm_model": "gpt-4.1-mini",
+        "llm_base_url": None,
+        "llm_api_key_configured": True,
+        "embedding_model": None,
+        "embedding_base_url": None,
+        "embedding_api_key_configured": False,
+        "embedding_vector_size": 1536,
+    }
+    assert "model-secret" not in catalog.text
     assert "read-only-token" in configuration_path.read_text(encoding="utf-8")
+    assert "model-secret" in configuration_path.read_text(encoding="utf-8")
     assert {item["name"] for item in tools.json()} >= {
         "query_prometheus",
         "query_loki",

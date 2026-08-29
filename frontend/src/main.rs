@@ -25,7 +25,7 @@ use crate::{
         ApiClientError, ApprovalRequest, CreateKnowledgeDocumentRequest, DiagnosisRunHistory,
         DiagnosisRunHistoryItem, DiagnosisRunSummary, HealthStatus, KnowledgeCatalog,
         KnowledgeDocument, McpConfiguration, McpConfigurationUpdate, McpServiceConfiguration,
-        OpsMindApiClient, ResumeDiagnosisRequest, StreamDiagnosisRequest,
+        ModelConfiguration, OpsMindApiClient, ResumeDiagnosisRequest, StreamDiagnosisRequest,
     },
     sse::ServerSentEvent,
 };
@@ -58,6 +58,14 @@ struct OpsMindConsole {
     mcp_kubernetes_token_input: Entity<InputState>,
     mcp_cmdb_url_input: Entity<InputState>,
     mcp_cmdb_token_input: Entity<InputState>,
+    llm_provider_input: Entity<InputState>,
+    llm_model_input: Entity<InputState>,
+    llm_api_key_input: Entity<InputState>,
+    llm_base_url_input: Entity<InputState>,
+    embedding_model_input: Entity<InputState>,
+    embedding_api_key_input: Entity<InputState>,
+    embedding_base_url_input: Entity<InputState>,
+    embedding_vector_size_input: Entity<InputState>,
     submission: SubmissionState,
     operator_submission: SubmissionState,
     approval_submission: SubmissionState,
@@ -286,6 +294,46 @@ impl OpsMindConsole {
                 .rows(1)
                 .placeholder("只读访问令牌（可选）")
         });
+        let llm_provider_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("openai 或 anthropic")
+        });
+        let llm_model_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("例如 gpt-4.1-mini")
+        });
+        let llm_api_key_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("模型 API 密钥")
+        });
+        let llm_base_url_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("自定义地址（可选）")
+        });
+        let embedding_model_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("例如 text-embedding-3-small")
+        });
+        let embedding_api_key_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("Embedding API 密钥（可选，默认复用模型密钥）")
+        });
+        let embedding_base_url_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("Embedding 自定义地址（可选）")
+        });
+        let embedding_vector_size_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("向量维度，例如 1536")
+        });
         let knowledge_title_input_subscription =
             cx.subscribe(&knowledge_title_input, |console, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -325,6 +373,14 @@ impl OpsMindConsole {
             mcp_kubernetes_token_input,
             mcp_cmdb_url_input,
             mcp_cmdb_token_input,
+            llm_provider_input,
+            llm_model_input,
+            llm_api_key_input,
+            llm_base_url_input,
+            embedding_model_input,
+            embedding_api_key_input,
+            embedding_base_url_input,
+            embedding_vector_size_input,
             submission: SubmissionState::Draft,
             operator_submission: SubmissionState::Draft,
             approval_submission: SubmissionState::Draft,
@@ -555,6 +611,35 @@ impl OpsMindConsole {
                 .to_owned(),
             cmdb_url: self.mcp_cmdb_url_input.read(cx).value().trim().to_owned(),
             cmdb_bearer_token: self.mcp_cmdb_token_input.read(cx).value().trim().to_owned(),
+            llm_provider: self.llm_provider_input.read(cx).value().trim().to_owned(),
+            llm_model: self.llm_model_input.read(cx).value().trim().to_owned(),
+            llm_api_key: self.llm_api_key_input.read(cx).value().trim().to_owned(),
+            llm_base_url: self.llm_base_url_input.read(cx).value().trim().to_owned(),
+            embedding_model: self
+                .embedding_model_input
+                .read(cx)
+                .value()
+                .trim()
+                .to_owned(),
+            embedding_api_key: self
+                .embedding_api_key_input
+                .read(cx)
+                .value()
+                .trim()
+                .to_owned(),
+            embedding_base_url: self
+                .embedding_base_url_input
+                .read(cx)
+                .value()
+                .trim()
+                .to_owned(),
+            embedding_vector_size: self
+                .embedding_vector_size_input
+                .read(cx)
+                .value()
+                .trim()
+                .parse()
+                .ok(),
         };
         self.mcp_configuration = McpConfigurationState::Saving(configuration);
         let api_base_url = self.api_base_url.clone();
@@ -1126,12 +1211,12 @@ impl OpsMindConsole {
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
-                            .child(div().text_color(rgb(0x4f829c)).child("MCP 数据源"))
+                            .child(div().text_color(rgb(0x4f829c)).child("运行设置"))
                             .child(
                                 div()
                                     .text_size(px(11.0))
                                     .text_color(rgb(0x697783))
-                                    .child("连接信息仅保存于本机；令牌不会在界面中回显。"),
+                                    .child("密钥仅保存于本机，不会在界面中回显。"),
                             ),
                     )
                     .child(
@@ -1160,6 +1245,23 @@ impl OpsMindConsole {
             McpConfigurationState::Ready(configuration)
             | McpConfigurationState::Saving(configuration) => {
                 panel = panel
+                    .child(model_configuration_form(
+                        &configuration.model,
+                        &self.llm_provider_input,
+                        &self.llm_model_input,
+                        &self.llm_api_key_input,
+                        &self.llm_base_url_input,
+                        &self.embedding_model_input,
+                        &self.embedding_api_key_input,
+                        &self.embedding_base_url_input,
+                        &self.embedding_vector_size_input,
+                    ))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(rgb(0x4f829c))
+                            .child("MCP 数据源"),
+                    )
                     .child(mcp_service_form(
                         "Prometheus",
                         "指标",
@@ -1416,7 +1518,7 @@ impl Render for OpsMindConsole {
             }
             WorkspacePage::Knowledge => ("知识库", "查看与诊断相关的操作说明和处理经验。"),
             WorkspacePage::History => ("历史记录", "查看本次应用中已完成的诊断记录。"),
-            WorkspacePage::Mcp => ("数据连接", "管理诊断可读取的本机 MCP 数据源。"),
+            WorkspacePage::Mcp => ("设置", "管理模型、知识库和诊断可读取的数据源。"),
         };
         div()
             .flex()
@@ -1556,7 +1658,7 @@ impl Render for OpsMindConsole {
                                             div().flex().justify_end().child(
                                                 Button::new("prepare-diagnosis")
                                                     .label("运行调查  →")
-                                                    .primary()
+                                                    .info()
                                                     .loading(self.is_busy())
                                                     .disabled(
                                                         !self.backend_is_ready()
@@ -1602,7 +1704,7 @@ impl Render for OpsMindConsole {
                                                         .child(
                                                             Button::new("resume-with-user-input")
                                                                 .label("提交并继续  →")
-                                                                .primary()
+                                                                .info()
                                                                 .loading(self.is_busy())
                                                                 .disabled(
                                                                     !self.backend_is_ready()
@@ -1658,7 +1760,7 @@ impl Render for OpsMindConsole {
                                                                 .child(
                                                                     Button::new("approve-approval")
                                                                         .label("记录批准")
-                                                                        .primary()
+                                                                        .info()
                                                                         .loading(self.is_busy())
                                                                         .disabled(
                                                                             !self
@@ -1705,7 +1807,7 @@ impl Render for OpsMindConsole {
                                                 .child(
                                                     Button::new("resume-approved-run")
                                                         .label("确认并继续")
-                                                        .primary()
+                                                        .info()
                                                         .loading(self.is_busy())
                                                         .disabled(
                                                             !self.backend_is_ready()
@@ -1794,7 +1896,7 @@ fn workbench_sidebar(page: WorkspacePage, cx: &mut Context<OpsMindConsole>) -> i
                         .on_click(cx.listener(OpsMindConsole::show_history)),
                 )
                 .child(
-                    workbench_nav_item("nav-mcp", "数据连接", page == WorkspacePage::Mcp)
+                    workbench_nav_item("nav-mcp", "设置", page == WorkspacePage::Mcp)
                         .on_click(cx.listener(OpsMindConsole::show_mcp)),
                 ),
         )
@@ -1888,7 +1990,7 @@ fn knowledge_catalog_panel(
                         .child(
                             Button::new("create-knowledge-document")
                                 .label("保存到知识库")
-                                .primary()
+                                .info()
                                 .loading(matches!(submission, KnowledgeSubmissionState::Saving))
                                 .disabled(matches!(submission, KnowledgeSubmissionState::Saving))
                                 .on_click(cx.listener(OpsMindConsole::submit_knowledge_document)),
@@ -2043,6 +2145,84 @@ fn knowledge_submission_detail(submission: &KnowledgeSubmissionState) -> &'stati
         KnowledgeSubmissionState::Saved => "已保存，可用于后续诊断。",
         KnowledgeSubmissionState::Failed => "暂时无法保存，请确认知识服务已配置。",
     }
+}
+
+fn model_configuration_form(
+    configuration: &ModelConfiguration,
+    llm_provider_input: &Entity<InputState>,
+    llm_model_input: &Entity<InputState>,
+    llm_api_key_input: &Entity<InputState>,
+    llm_base_url_input: &Entity<InputState>,
+    embedding_model_input: &Entity<InputState>,
+    embedding_api_key_input: &Entity<InputState>,
+    embedding_base_url_input: &Entity<InputState>,
+    embedding_vector_size_input: &Entity<InputState>,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(10.0))
+        .p(px(14.0))
+        .rounded(px(10.0))
+        .bg(rgba(0xffffffa3))
+        .border_1()
+        .border_color(rgba(0xffffffd1))
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .items_center()
+                .child(div().text_size(px(13.0)).child("模型与知识库"))
+                .child(
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(rgb(0x5a8da7))
+                        .child("保存后用于新的诊断"),
+                ),
+        )
+        .child(
+            div()
+                .text_size(px(11.0))
+                .text_color(rgb(0x697783))
+                .child(format!(
+                    "当前模型：{} · {}",
+                    configuration.llm_provider.as_deref().unwrap_or("未配置"),
+                    configuration.llm_model.as_deref().unwrap_or("未配置"),
+                )),
+        )
+        .child(Input::new(llm_provider_input).h(px(34.0)))
+        .child(Input::new(llm_model_input).h(px(34.0)))
+        .child(div().text_size(px(11.0)).text_color(rgb(0x697783)).child(
+            if configuration.llm_api_key_configured {
+                "模型密钥已保存；留空不会覆盖。"
+            } else {
+                "尚未保存模型密钥。"
+            },
+        ))
+        .child(Input::new(llm_api_key_input).h(px(34.0)))
+        .child(Input::new(llm_base_url_input).h(px(34.0)))
+        .child(
+            div()
+                .mt(px(4.0))
+                .text_size(px(11.0))
+                .text_color(rgb(0x5a8da7))
+                .child(format!(
+                    "当前 Embedding：{} · {} 维",
+                    configuration.embedding_model.as_deref().unwrap_or("未配置"),
+                    configuration.embedding_vector_size,
+                )),
+        )
+        .child(Input::new(embedding_model_input).h(px(34.0)))
+        .child(div().text_size(px(11.0)).text_color(rgb(0x697783)).child(
+            if configuration.embedding_api_key_configured {
+                "Embedding 密钥已保存；留空不会覆盖。"
+            } else {
+                "未单独配置时会复用模型密钥。"
+            },
+        ))
+        .child(Input::new(embedding_api_key_input).h(px(34.0)))
+        .child(Input::new(embedding_base_url_input).h(px(34.0)))
+        .child(Input::new(embedding_vector_size_input).h(px(34.0)))
 }
 
 fn mcp_service_form(
