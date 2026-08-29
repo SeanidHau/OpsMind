@@ -49,6 +49,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="任一样本未通过时，以状态码 1 退出",
     )
+    parser.add_argument(
+        "--knowledge-only",
+        action="store_true",
+        help="仅注册知识检索工具，适用于没有本地观测数据的公开事故复盘样本",
+    )
     return parser.parse_args()
 
 
@@ -87,7 +92,8 @@ async def main() -> int:
     args = parse_args()
     settings = get_settings()
     registry = ToolRegistry()
-    register_scenario_tools(registry, create_default_scenario_store())
+    if not args.knowledge_only:
+        register_scenario_tools(registry, create_default_scenario_store())
     knowledge_searcher = create_knowledge_searcher()
     if knowledge_searcher is not None:
         register_knowledge_tools(registry, knowledge_searcher)

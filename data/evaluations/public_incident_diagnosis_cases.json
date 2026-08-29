@@ -1,0 +1,23 @@
+[
+  {
+    "case_id": "cloudflare-r2-credential-rotation",
+    "user_query": "对象存储服务在凭证轮换后出现写入全部失败、部分读取失败。请仅依据知识库中的公开事故复盘，说明候选根因、证据和安全处理建议。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "凭证",
+    "expected_evidence_tools": ["query_knowledge"]
+  },
+  {
+    "case_id": "openai-kubernetes-telemetry",
+    "user_query": "大型 Kubernetes 集群在发布全节点遥测服务后出现服务发现失败。请仅依据知识库中的公开事故复盘，说明候选根因、证据和安全处理建议。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "Kubernetes API",
+    "expected_evidence_tools": ["query_knowledge"]
+  },
+  {
+    "case_id": "github-database-failover",
+    "user_query": "网络短暂分区后，数据库被切换到异地，随后出现复制延迟和用户可见数据不一致。请仅依据知识库中的公开事故复盘，说明候选根因、证据和安全处理建议。",
+    "expected_terminal_status": "completed",
+    "expected_root_cause_contains": "网络分区",
+    "expected_evidence_tools": ["query_knowledge"]
+  }
+]
