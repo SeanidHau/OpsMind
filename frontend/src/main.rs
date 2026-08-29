@@ -1474,6 +1474,7 @@ fn main() {
             },
         )
         .expect("failed to open OpsMind desktop window");
+        cx.activate(true);
     });
 }
 
