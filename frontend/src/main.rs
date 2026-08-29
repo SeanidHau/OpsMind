@@ -12,7 +12,7 @@ mod api_client;
 
 use gpui::{
     App, Application, Bounds, ClickEvent, Context, Entity, IntoElement, Render, Subscription,
-    Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, rgba, size,
+    Window, WindowBounds, WindowOptions, div, img, prelude::*, px, rgb, rgba, size,
 };
 use gpui_component::{
     Disableable as _, Root,
@@ -1129,15 +1129,11 @@ impl Render for OpsMindConsole {
                             .items_center()
                             .gap(px(10.0))
                             .child(
-                                div()
-                                    .size(px(28.0))
-                                    .rounded(px(7.0))
-                                    .bg(rgb(0x6ca8c3))
-                                    .text_color(rgb(0xffffff))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child("O"),
+                                img(PathBuf::from(concat!(
+                                    env!("CARGO_MANIFEST_DIR"),
+                                    "/assets/opsmind-icon.png"
+                                )))
+                                .size(px(28.0)),
                             )
                             .child(
                                 div()
