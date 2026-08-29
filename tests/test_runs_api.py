@@ -1,6 +1,7 @@
 """诊断运行 API 与应用运行器注入的验收测试。"""
 
 import asyncio
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
@@ -38,6 +39,7 @@ def test_runs_history_endpoint_returns_safe_archive_summaries() -> None:
                 terminal_status=HarnessStatus.COMPLETED,
                 final_state={"user_query": "支付服务请求超时", "step_count": 4},
                 trajectory=[],
+                captured_at=datetime(2026, 8, 29, 9, 30, tzinfo=UTC),
             )
         )
     )
@@ -52,9 +54,39 @@ def test_runs_history_endpoint_returns_safe_archive_summaries() -> None:
                 "status": "completed",
                 "step_count": 4,
                 "query": "支付服务请求超时",
+                "captured_at": "2026-08-29T09:30:00Z",
             }
         ]
     }
+
+
+def test_in_memory_history_uses_capture_time_not_random_run_id() -> None:
+    """开发环境的历史顺序必须与 PostgreSQL 的最新优先语义一致。"""
+    archive = InMemoryRunArchive()
+    older = RunSnapshot(
+        run_id=UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+        session_id="history-session",
+        thread_id="history-thread",
+        terminal_status=HarnessStatus.COMPLETED,
+        final_state={"user_query": "较早记录", "step_count": 1},
+        trajectory=[],
+        captured_at=datetime(2026, 8, 29, 9, 0, tzinfo=UTC),
+    )
+    newer = RunSnapshot(
+        run_id=UUID("00000000-0000-0000-0000-000000000000"),
+        session_id="history-session",
+        thread_id="history-thread",
+        terminal_status=HarnessStatus.COMPLETED,
+        final_state={"user_query": "较新记录", "step_count": 1},
+        trajectory=[],
+        captured_at=datetime(2026, 8, 29, 10, 0, tzinfo=UTC),
+    )
+    asyncio.run(archive.save(older))
+    asyncio.run(archive.save(newer))
+
+    snapshots = asyncio.run(archive.list_snapshots(limit=2))
+
+    assert [snapshot.run_id for snapshot in snapshots] == [newer.run_id, older.run_id]
 
 
 class RecordingDiagnosisRunner:

@@ -24,7 +24,8 @@ use crate::{
     api_client::{
         ApiClientError, ApprovalRequest, CreateKnowledgeDocumentRequest, DiagnosisRunHistory,
         DiagnosisRunHistoryItem, DiagnosisRunSummary, HealthStatus, KnowledgeCatalog,
-        KnowledgeDocument, OpsMindApiClient, ResumeDiagnosisRequest, StreamDiagnosisRequest,
+        KnowledgeDocument, McpConfiguration, McpConfigurationUpdate, McpServiceConfiguration,
+        OpsMindApiClient, ResumeDiagnosisRequest, StreamDiagnosisRequest,
     },
     sse::ServerSentEvent,
 };
@@ -41,11 +42,22 @@ struct OpsMindConsole {
     knowledge_catalog: KnowledgeCatalogState,
     selected_knowledge_document: SelectedKnowledgeDocumentState,
     history: HistoryState,
+    mcp_configuration: McpConfigurationState,
     diagnosis_input: Entity<InputState>,
     operator_input: Entity<InputState>,
     approval_input: Entity<InputState>,
     knowledge_title_input: Entity<InputState>,
     knowledge_content_input: Entity<InputState>,
+    mcp_prometheus_url_input: Entity<InputState>,
+    mcp_prometheus_token_input: Entity<InputState>,
+    mcp_loki_url_input: Entity<InputState>,
+    mcp_loki_token_input: Entity<InputState>,
+    mcp_jaeger_url_input: Entity<InputState>,
+    mcp_jaeger_token_input: Entity<InputState>,
+    mcp_kubernetes_url_input: Entity<InputState>,
+    mcp_kubernetes_token_input: Entity<InputState>,
+    mcp_cmdb_url_input: Entity<InputState>,
+    mcp_cmdb_token_input: Entity<InputState>,
     submission: SubmissionState,
     operator_submission: SubmissionState,
     approval_submission: SubmissionState,
@@ -67,6 +79,7 @@ enum WorkspacePage {
     Investigation,
     Knowledge,
     History,
+    Mcp,
 }
 
 enum ConnectionState {
@@ -91,6 +104,13 @@ enum SelectedKnowledgeDocumentState {
 enum HistoryState {
     Loading,
     Ready(DiagnosisRunHistory),
+    Unavailable,
+}
+
+enum McpConfigurationState {
+    Loading,
+    Ready(McpConfiguration),
+    Saving(McpConfiguration),
     Unavailable,
 }
 
@@ -216,6 +236,56 @@ impl OpsMindConsole {
                 .rows(5)
                 .placeholder("输入 Markdown 内容，例如处理步骤、注意事项和适用范围")
         });
+        let mcp_prometheus_url_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("http://127.0.0.1:9090")
+        });
+        let mcp_prometheus_token_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("只读访问令牌（可选）")
+        });
+        let mcp_loki_url_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("http://127.0.0.1:3100")
+        });
+        let mcp_loki_token_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("只读访问令牌（可选）")
+        });
+        let mcp_jaeger_url_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("http://127.0.0.1:16686")
+        });
+        let mcp_jaeger_token_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("只读访问令牌（可选）")
+        });
+        let mcp_kubernetes_url_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("https://kubernetes.example.com")
+        });
+        let mcp_kubernetes_token_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("只读访问令牌")
+        });
+        let mcp_cmdb_url_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("https://cmdb.example.com")
+        });
+        let mcp_cmdb_token_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .rows(1)
+                .placeholder("只读访问令牌（可选）")
+        });
         let knowledge_title_input_subscription =
             cx.subscribe(&knowledge_title_input, |console, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -239,11 +309,22 @@ impl OpsMindConsole {
             knowledge_catalog: KnowledgeCatalogState::Loading,
             selected_knowledge_document: SelectedKnowledgeDocumentState::None,
             history: HistoryState::Loading,
+            mcp_configuration: McpConfigurationState::Loading,
             diagnosis_input,
             operator_input,
             approval_input,
             knowledge_title_input,
             knowledge_content_input,
+            mcp_prometheus_url_input,
+            mcp_prometheus_token_input,
+            mcp_loki_url_input,
+            mcp_loki_token_input,
+            mcp_jaeger_url_input,
+            mcp_jaeger_token_input,
+            mcp_kubernetes_url_input,
+            mcp_kubernetes_token_input,
+            mcp_cmdb_url_input,
+            mcp_cmdb_token_input,
             submission: SubmissionState::Draft,
             operator_submission: SubmissionState::Draft,
             approval_submission: SubmissionState::Draft,
@@ -371,6 +452,12 @@ impl OpsMindConsole {
         cx.notify();
     }
 
+    fn show_mcp(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.page = WorkspacePage::Mcp;
+        self.refresh_mcp_configuration(cx);
+        cx.notify();
+    }
+
     fn refresh_history(&mut self, cx: &mut Context<Self>) {
         self.history = HistoryState::Loading;
         let api_base_url = self.api_base_url.clone();
@@ -391,6 +478,115 @@ impl OpsMindConsole {
                 });
             })
             .detach();
+    }
+
+    fn refresh_mcp_configuration(&mut self, cx: &mut Context<Self>) {
+        self.mcp_configuration = McpConfigurationState::Loading;
+        let api_base_url = self.api_base_url.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { OpsMindApiClient::new(api_base_url).mcp_configuration() });
+        let this = cx.weak_entity();
+        let mut async_cx = cx.to_async();
+        cx.foreground_executor()
+            .spawn(async move {
+                let configuration = task.await;
+                let _ = this.update(&mut async_cx, |console, cx| {
+                    console.mcp_configuration = match configuration {
+                        Ok(configuration) => McpConfigurationState::Ready(configuration),
+                        Err(_) => McpConfigurationState::Unavailable,
+                    };
+                    cx.notify();
+                });
+            })
+            .detach();
+    }
+
+    fn save_mcp_configuration(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.persist_mcp_configuration(None, cx);
+    }
+
+    fn toggle_mcp_configuration(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let enabled = !self.mcp_is_enabled();
+        self.persist_mcp_configuration(Some(enabled), cx);
+    }
+
+    fn persist_mcp_configuration(&mut self, enabled: Option<bool>, cx: &mut Context<Self>) {
+        let configuration = match &self.mcp_configuration {
+            McpConfigurationState::Ready(configuration) => configuration.clone(),
+            _ => return,
+        };
+        let request = McpConfigurationUpdate {
+            enabled: enabled.unwrap_or(configuration.enabled),
+            command: configuration.command.clone(),
+            arguments: configuration.arguments.clone(),
+            prometheus_url: self
+                .mcp_prometheus_url_input
+                .read(cx)
+                .value()
+                .trim()
+                .to_owned(),
+            prometheus_bearer_token: self
+                .mcp_prometheus_token_input
+                .read(cx)
+                .value()
+                .trim()
+                .to_owned(),
+            loki_url: self.mcp_loki_url_input.read(cx).value().trim().to_owned(),
+            loki_bearer_token: self.mcp_loki_token_input.read(cx).value().trim().to_owned(),
+            jaeger_url: self.mcp_jaeger_url_input.read(cx).value().trim().to_owned(),
+            jaeger_bearer_token: self
+                .mcp_jaeger_token_input
+                .read(cx)
+                .value()
+                .trim()
+                .to_owned(),
+            kubernetes_url: self
+                .mcp_kubernetes_url_input
+                .read(cx)
+                .value()
+                .trim()
+                .to_owned(),
+            kubernetes_bearer_token: self
+                .mcp_kubernetes_token_input
+                .read(cx)
+                .value()
+                .trim()
+                .to_owned(),
+            cmdb_url: self.mcp_cmdb_url_input.read(cx).value().trim().to_owned(),
+            cmdb_bearer_token: self.mcp_cmdb_token_input.read(cx).value().trim().to_owned(),
+        };
+        self.mcp_configuration = McpConfigurationState::Saving(configuration);
+        let api_base_url = self.api_base_url.clone();
+        let task = cx.background_executor().spawn(async move {
+            OpsMindApiClient::new(api_base_url).update_mcp_configuration(&request)
+        });
+        let this = cx.weak_entity();
+        let mut async_cx = cx.to_async();
+        cx.foreground_executor()
+            .spawn(async move {
+                let result = task.await;
+                let _ = this.update(&mut async_cx, |console, cx| {
+                    console.mcp_configuration = match result {
+                        Ok(configuration) => McpConfigurationState::Ready(configuration),
+                        Err(_) => McpConfigurationState::Unavailable,
+                    };
+                    cx.notify();
+                });
+            })
+            .detach();
+    }
+
+    fn mcp_is_enabled(&self) -> bool {
+        matches!(
+            &self.mcp_configuration,
+            McpConfigurationState::Ready(configuration) | McpConfigurationState::Saving(configuration)
+                if configuration.enabled
+        )
+    }
+
+    fn mcp_is_saving(&self) -> bool {
+        matches!(self.mcp_configuration, McpConfigurationState::Saving(_))
     }
 
     fn submit_knowledge_document(
@@ -909,6 +1105,110 @@ impl OpsMindConsole {
             RunState::Failed => String::from("本次分析未完成，请稍后重试。"),
         }
     }
+
+    fn mcp_configuration_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let mut panel = div()
+            .flex()
+            .flex_col()
+            .gap(px(14.0))
+            .p(px(20.0))
+            .rounded(px(14.0))
+            .bg(rgba(0xffffff8f))
+            .border_1()
+            .border_color(rgba(0xffffffb8))
+            .child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .child(div().text_color(rgb(0x4f829c)).child("MCP 数据源"))
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(0x697783))
+                                    .child("连接信息仅保存于本机；令牌不会在界面中回显。"),
+                            ),
+                    )
+                    .child(
+                        Button::new("toggle-mcp")
+                            .label(if self.mcp_is_enabled() {
+                                "已启用"
+                            } else {
+                                "未启用"
+                            })
+                            .disabled(self.mcp_is_saving() || !self.backend_is_ready())
+                            .on_click(cx.listener(Self::toggle_mcp_configuration)),
+                    ),
+            );
+
+        match &self.mcp_configuration {
+            McpConfigurationState::Loading => {
+                panel = panel.child(div().text_color(rgb(0x697783)).child("正在读取连接配置…"));
+            }
+            McpConfigurationState::Unavailable => {
+                panel = panel.child(
+                    div()
+                        .text_color(rgb(0xc76a62))
+                        .child("暂时无法读取或保存连接配置，请确认服务已启动。"),
+                );
+            }
+            McpConfigurationState::Ready(configuration)
+            | McpConfigurationState::Saving(configuration) => {
+                panel = panel
+                    .child(mcp_service_form(
+                        "Prometheus",
+                        "指标",
+                        &configuration.prometheus,
+                        &self.mcp_prometheus_url_input,
+                        &self.mcp_prometheus_token_input,
+                    ))
+                    .child(mcp_service_form(
+                        "Loki",
+                        "日志",
+                        &configuration.loki,
+                        &self.mcp_loki_url_input,
+                        &self.mcp_loki_token_input,
+                    ))
+                    .child(mcp_service_form(
+                        "Jaeger",
+                        "调用链",
+                        &configuration.jaeger,
+                        &self.mcp_jaeger_url_input,
+                        &self.mcp_jaeger_token_input,
+                    ))
+                    .child(mcp_service_form(
+                        "Kubernetes",
+                        "集群资源",
+                        &configuration.kubernetes,
+                        &self.mcp_kubernetes_url_input,
+                        &self.mcp_kubernetes_token_input,
+                    ))
+                    .child(mcp_service_form(
+                        "CMDB",
+                        "服务与依赖",
+                        &configuration.cmdb,
+                        &self.mcp_cmdb_url_input,
+                        &self.mcp_cmdb_token_input,
+                    ))
+                    .child(
+                        div().flex().justify_end().child(
+                            Button::new("save-mcp")
+                                .label("保存连接")
+                                .primary()
+                                .loading(self.mcp_is_saving())
+                                .disabled(self.mcp_is_saving() || !self.backend_is_ready())
+                                .on_click(cx.listener(Self::save_mcp_configuration)),
+                        ),
+                    );
+            }
+        }
+        panel
+    }
 }
 
 fn normalize_diagnosis_query(raw_query: &str) -> Result<String, ()> {
@@ -1106,6 +1406,7 @@ impl Render for OpsMindConsole {
             }
             WorkspacePage::Knowledge => ("知识库", "查看与诊断相关的操作说明和处理经验。"),
             WorkspacePage::History => ("历史记录", "查看本次应用中已完成的诊断记录。"),
+            WorkspacePage::Mcp => ("数据连接", "管理诊断可读取的本机 MCP 数据源。"),
         };
         div()
             .flex()
@@ -1430,6 +1731,9 @@ impl Render for OpsMindConsole {
                             })
                             .when(self.page == WorkspacePage::History, |this| {
                                 this.child(history_panel(&self.history))
+                            })
+                            .when(self.page == WorkspacePage::Mcp, |this| {
+                                this.child(self.mcp_configuration_panel(cx))
                             }),
                     )
                     .child(trajectory_panel(
@@ -1478,6 +1782,10 @@ fn workbench_sidebar(page: WorkspacePage, cx: &mut Context<OpsMindConsole>) -> i
                 .child(
                     workbench_nav_item("nav-history", "历史记录", page == WorkspacePage::History)
                         .on_click(cx.listener(OpsMindConsole::show_history)),
+                )
+                .child(
+                    workbench_nav_item("nav-mcp", "数据连接", page == WorkspacePage::Mcp)
+                        .on_click(cx.listener(OpsMindConsole::show_mcp)),
                 ),
         )
         .child(
@@ -1727,6 +2035,52 @@ fn knowledge_submission_detail(submission: &KnowledgeSubmissionState) -> &'stati
     }
 }
 
+fn mcp_service_form(
+    name: &'static str,
+    capability: &'static str,
+    configuration: &McpServiceConfiguration,
+    url_input: &Entity<InputState>,
+    token_input: &Entity<InputState>,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .p(px(14.0))
+        .rounded(px(10.0))
+        .bg(rgba(0xffffffa3))
+        .border_1()
+        .border_color(rgba(0xffffffd1))
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .items_center()
+                .child(div().text_size(px(13.0)).child(name))
+                .child(
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(rgb(0x5a8da7))
+                        .child(capability),
+                ),
+        )
+        .child(div().text_size(px(11.0)).text_color(rgb(0x697783)).child(
+            match &configuration.url {
+                Some(url) => format!("当前地址：{url}"),
+                None => String::from("尚未配置地址"),
+            },
+        ))
+        .child(Input::new(url_input).h(px(34.0)))
+        .child(div().text_size(px(11.0)).text_color(rgb(0x697783)).child(
+            if configuration.token_configured {
+                "已保存只读令牌；留空不会覆盖。"
+            } else {
+                "尚未保存令牌；如需认证可在下方填写。"
+            },
+        ))
+        .child(Input::new(token_input).h(px(34.0)))
+}
+
 fn history_panel(history: &HistoryState) -> gpui::Div {
     let mut panel = div()
         .flex()
@@ -1782,14 +2136,26 @@ fn history_item_panel(run: &DiagnosisRunHistoryItem) -> gpui::Div {
                 .text_size(px(11.0))
                 .text_color(rgb(0x697783))
                 .child(format!(
-                    "{} · {} 个步骤",
+                    "{} · {} 个步骤 · {} · #{}",
                     run.status
                         .as_deref()
                         .map(status_label)
                         .unwrap_or("状态未知"),
-                    run.step_count
+                    run.step_count,
+                    history_timestamp(&run.captured_at),
+                    run.run_id.get(..8).unwrap_or("未知"),
                 )),
         )
+}
+
+fn history_timestamp(value: &str) -> String {
+    value
+        .trim_end_matches('Z')
+        .replace('T', " ")
+        .split('.')
+        .next()
+        .unwrap_or("时间未知")
+        .to_owned()
 }
 
 fn panel(title: &'static str, detail: &str) -> impl IntoElement {

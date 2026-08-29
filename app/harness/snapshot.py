@@ -60,13 +60,13 @@ class InMemoryRunArchive:
         self._snapshots[snapshot.run_id] = snapshot.model_copy(deep=True)
 
     async def list_snapshots(self, *, limit: int) -> list[RunSnapshot]:
-        """按 UUID 稳定排序，供开发环境展示最近的有限记录。"""
+        """按真实捕获时间倒序读取，保持与 PostgreSQL 归档一致。"""
         if limit <= 0:
             return []
         return [
             snapshot.model_copy(deep=True)
             for _, snapshot in sorted(
-                self._snapshots.items(), key=lambda item: str(item[0]), reverse=True
+                self._snapshots.items(), key=lambda item: item[1].captured_at, reverse=True
             )[:limit]
         ]
 

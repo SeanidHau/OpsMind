@@ -55,12 +55,53 @@ pub struct DiagnosisRunHistoryItem {
     pub status: Option<String>,
     pub step_count: usize,
     pub query: String,
+    pub captured_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosisRunHistory {
     pub runs: Vec<DiagnosisRunHistoryItem>,
+}
+
+/// MCP 连接中单个系统的安全展示信息；令牌值永不返回桌面端。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServiceConfiguration {
+    pub url: Option<String>,
+    pub token_configured: bool,
+}
+
+/// 内置 MCP Server 的本机连接摘要。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpConfiguration {
+    pub enabled: bool,
+    pub command: String,
+    pub arguments: String,
+    pub prometheus: McpServiceConfiguration,
+    pub loki: McpServiceConfiguration,
+    pub jaeger: McpServiceConfiguration,
+    pub kubernetes: McpServiceConfiguration,
+    pub cmdb: McpServiceConfiguration,
+}
+
+/// 保存 MCP 配置时提交的本机端点与可选只读令牌。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct McpConfigurationUpdate {
+    pub enabled: bool,
+    pub command: String,
+    pub arguments: String,
+    pub prometheus_url: String,
+    pub prometheus_bearer_token: String,
+    pub loki_url: String,
+    pub loki_bearer_token: String,
+    pub jaeger_url: String,
+    pub jaeger_bearer_token: String,
+    pub kubernetes_url: String,
+    pub kubernetes_bearer_token: String,
+    pub cmdb_url: String,
+    pub cmdb_bearer_token: String,
 }
 
 /// 创建一次实时诊断运行所需的公开请求字段。
@@ -190,6 +231,19 @@ impl OpsMindApiClient {
         self.get_json("/runs")
     }
 
+    /// 读取内置 MCP Server 的本机连接配置，不返回任何令牌内容。
+    pub fn mcp_configuration(&self) -> Result<McpConfiguration, ApiClientError> {
+        self.get_json("/mcp")
+    }
+
+    /// 保存 MCP 连接配置并让后续诊断使用更新后的工具目录。
+    pub fn update_mcp_configuration(
+        &self,
+        request: &McpConfigurationUpdate,
+    ) -> Result<McpConfiguration, ApiClientError> {
+        self.put_json("/mcp", request)
+    }
+
     /// 创建诊断运行，并在读取到每个完整 SSE 事件时立即回调。
     pub fn stream_diagnosis(
         &self,
@@ -296,6 +350,31 @@ impl OpsMindApiClient {
         let mut response = self
             .agent
             .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .send(&body)
+            .map_err(|error| ApiClientError::Request(error.to_string()))?;
+        let response_body = response
+            .body_mut()
+            .with_config()
+            .limit(MAX_RESPONSE_BYTES)
+            .read_to_string()
+            .map_err(|error| ApiClientError::Request(error.to_string()))?;
+
+        serde_json::from_str(&response_body)
+            .map_err(|error| ApiClientError::InvalidResponse(error.to_string()))
+    }
+
+    fn put_json<T>(&self, path: &str, request: &impl Serialize) -> Result<T, ApiClientError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let body = serde_json::to_string(request)
+            .map_err(|error| ApiClientError::InvalidResponse(error.to_string()))?;
+        let url = format!("{}{API_PREFIX}{path}", self.base_url);
+        let mut response = self
+            .agent
+            .put(&url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .send(&body)

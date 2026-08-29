@@ -71,6 +71,7 @@ def history_item_from_snapshot(snapshot: RunSnapshot) -> DiagnosisRunHistoryItem
         status=snapshot.terminal_status,
         step_count=int(snapshot.final_state.get("step_count", 0)),
         query=query[:200] or "未记录问题描述",
+        captured_at=snapshot.captured_at,
     )
 
 

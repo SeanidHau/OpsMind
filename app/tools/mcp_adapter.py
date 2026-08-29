@@ -23,8 +23,18 @@ class McpToolInvoker(Protocol):
 class StdioMcpToolInvoker:
     """按一次调用一个短连接的方式运行本地 stdio MCP Server。"""
 
-    def __init__(self, *, command: str, arguments: str | None = None) -> None:
-        self._params = StdioServerParameters(command=command, args=shlex.split(arguments or ""))
+    def __init__(
+        self,
+        *,
+        command: str,
+        arguments: str | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> None:
+        self._params = StdioServerParameters(
+            command=command,
+            args=shlex.split(arguments or ""),
+            env=environment,
+        )
 
     async def __call__(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         """启动受配置控制的 MCP Server 并调用一个工具。"""

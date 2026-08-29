@@ -119,6 +119,8 @@ CMDB_URL=https://your-cmdb.example
 
 启用后可用的只读工具包括：`query_prometheus`（PromQL）、`query_loki`（LogQL）、`query_jaeger`（服务调用链）、`query_kubernetes`（Pods、Services、Deployments、Events）和 `query_cmdb`（服务与依赖）。每个工具最多在单次诊断中调用两次；Kubernetes 资源有固定白名单，所有上游响应均会限量后再交给 Agent。若未启用 `OBSERVABILITY_MCP_COMMAND`，应用继续使用原有的 Prometheus 直连配置。
 
+桌面端的“数据连接”页面可直接查看和更新这些 MCP 数据源。地址与只读令牌仅保存于本机的 `.opsmind/mcp-configuration.json`，该目录不会提交到 Git；界面只显示令牌是否已保存，不会回显令牌内容。保存后，新发起的诊断会立即使用更新后的工具目录。
+
 ```dotenv
 PROMETHEUS_URL=https://prometheus.example.com
 PROMETHEUS_BEARER_TOKEN=your-read-only-token

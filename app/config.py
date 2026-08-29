@@ -20,6 +20,7 @@ class AppEnvironment(StrEnum):
 
 
 DEFAULT_KNOWLEDGE_SOURCE_DIRECTORY = Path(__file__).resolve().parents[1] / "data" / "knowledge"
+DEFAULT_MCP_CONFIGURATION_PATH = Path(".opsmind/mcp-configuration.json")
 
 
 class Settings(BaseSettings):
@@ -51,6 +52,7 @@ class Settings(BaseSettings):
     kubernetes_bearer_token: SecretStr | None = None
     cmdb_url: AnyHttpUrl | None = None
     cmdb_bearer_token: SecretStr | None = None
+    mcp_configuration_path: Path = DEFAULT_MCP_CONFIGURATION_PATH
     # 设置后，Harness 通过 stdio MCP Server 调用观测系统；未设置时保留直连 Prometheus 回退。
     observability_mcp_command: str | None = None
     observability_mcp_args: str | None = None

@@ -50,6 +50,7 @@ class DiagnosisRunHistoryItem(BaseModel):
     status: HarnessStatus | None
     step_count: int = Field(ge=0)
     query: str = Field(min_length=1, max_length=200)
+    captured_at: datetime
 
 
 class DiagnosisRunHistoryResponse(BaseModel):
