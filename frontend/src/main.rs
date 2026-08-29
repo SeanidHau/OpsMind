@@ -28,7 +28,7 @@ use crate::{
 };
 
 const DEFAULT_API_BASE_URL: &str = "http://127.0.0.1:8000";
-const MAX_TRAJECTORY_ENTRIES: usize = 12;
+const MAX_TRAJECTORY_ENTRIES: usize = 64;
 const MAX_FINAL_ANSWER_CHARS: usize = 12_000;
 
 struct OpsMindConsole {
@@ -46,7 +46,8 @@ struct OpsMindConsole {
     approval_submission: SubmissionState,
     page: WorkspacePage,
     run: RunState,
-    trajectory: Vec<String>,
+    trajectory: Vec<TrajectoryEntry>,
+    expanded_trajectory_id: Option<String>,
     _input_subscription: Subscription,
     _operator_input_subscription: Subscription,
     _approval_input_subscription: Subscription,
@@ -110,6 +111,14 @@ enum RunState {
         final_answer: Option<String>,
     },
     Failed,
+}
+
+/// 仅保存 API 已投影的安全运行摘要，供工作流面板展示。
+#[derive(Clone)]
+struct TrajectoryEntry {
+    id: String,
+    summary: String,
+    detail: String,
 }
 
 enum StreamUpdate {
@@ -190,6 +199,7 @@ impl OpsMindConsole {
             page: WorkspacePage::Investigation,
             run: RunState::Idle,
             trajectory: Vec::new(),
+            expanded_trajectory_id: None,
             _input_subscription: input_subscription,
             _operator_input_subscription: operator_input_subscription,
             _approval_input_subscription: approval_input_subscription,
@@ -457,6 +467,7 @@ impl OpsMindConsole {
         };
         self.run = RunState::Running { event_count: 0 };
         self.trajectory.clear();
+        self.expanded_trajectory_id = None;
         cx.notify();
 
         let request = StreamDiagnosisRequest {
@@ -525,6 +536,12 @@ impl OpsMindConsole {
                 }
             }
         }
+    }
+
+    fn toggle_trajectory_entry(&mut self, entry_id: String, cx: &mut Context<Self>) {
+        self.expanded_trajectory_id =
+            (self.expanded_trajectory_id.as_deref() != Some(entry_id.as_str())).then_some(entry_id);
+        cx.notify();
     }
 
     fn operator_submission_detail(&self) -> String {
@@ -809,7 +826,7 @@ fn is_safe_run_id(value: &str) -> bool {
         })
 }
 
-fn trajectory_entry(event_name: &str, data: &serde_json::Value) -> Option<String> {
+fn trajectory_entry(event_name: &str, data: &serde_json::Value) -> Option<TrajectoryEntry> {
     let event_type = data["event_type"].as_str()?;
     if event_type != event_name || !is_safe_trajectory_event(event_name) {
         return None;
@@ -817,11 +834,55 @@ fn trajectory_entry(event_name: &str, data: &serde_json::Value) -> Option<String
 
     let step_id = data["step_id"].as_u64()?;
     let latency_ms = data["latency_ms"].as_u64();
-    let mut entry = format!("步骤 {step_id} · {}", event_label(event_name));
+    let mut summary = format!("步骤 {step_id} · {}", event_label(event_name));
     if let Some(latency_ms) = latency_ms {
-        entry.push_str(&format!(" · 耗时 {latency_ms} ms"));
+        summary.push_str(&format!(" · 耗时 {latency_ms} ms"));
     }
-    Some(entry)
+    let detail = trajectory_detail(event_name, data, latency_ms);
+    Some(TrajectoryEntry {
+        id: format!("{step_id}-{event_name}"),
+        summary,
+        detail,
+    })
+}
+
+fn trajectory_detail(
+    event_name: &str,
+    data: &serde_json::Value,
+    latency_ms: Option<u64>,
+) -> String {
+    let mut details = vec![format!("阶段：{}", event_label(event_name))];
+    if let Some(tool_name) = data["tool_name"].as_str().and_then(safe_tool_label) {
+        details.push(format!("涉及：{tool_name}"));
+    }
+    if let Some(decision) = data["decision"].as_str().and_then(safe_trajectory_detail) {
+        details.push(format!("说明：{decision}"));
+    }
+    if let Some(latency_ms) = latency_ms {
+        details.push(format!("耗时：{latency_ms} ms"));
+    }
+    if data["error"].is_string() {
+        details.push(String::from("该步骤未完成，系统已按安全策略处理。"));
+    }
+    details.join("\n")
+}
+
+fn safe_trajectory_detail(value: &str) -> Option<String> {
+    let detail = value.trim();
+    if detail.is_empty() || detail.chars().count() > 500 {
+        return None;
+    }
+    Some(detail.to_owned())
+}
+
+fn safe_tool_label(value: &str) -> Option<&'static str> {
+    match value {
+        "query_metrics" => Some("服务指标"),
+        "query_logs" => Some("运行日志"),
+        "query_topology" => Some("服务关系"),
+        "query_knowledge" => Some("处理经验"),
+        _ => None,
+    }
 }
 
 fn event_label(event_name: &str) -> &'static str {
@@ -959,14 +1020,18 @@ impl Render for OpsMindConsole {
                 div()
                     .flex()
                     .flex_1()
+                    .overflow_hidden()
                     .child(workbench_sidebar(&self.catalog_detail(), self.page, cx))
                     .child(
                         div()
+                            .id("main-workspace-scroll")
                             .flex()
                             .flex_col()
                             .flex_1()
+                            .min_w(px(0.0))
                             .p(px(24.0))
                             .gap(px(18.0))
+                            .overflow_y_scroll()
                             .child(
                                 div()
                                     .flex()
@@ -1215,7 +1280,7 @@ impl Render for OpsMindConsole {
                                 )
                                 .when_some(
                                     self.final_answer().map(str::to_owned),
-                                    |this, answer| this.child(report_panel(&answer)),
+                                    |this, answer: String| this.child(report_panel(&answer)),
                                 )
                             })
                             .when(self.page == WorkspacePage::Knowledge, |this| {
@@ -1228,7 +1293,12 @@ impl Render for OpsMindConsole {
                                 ))
                             }),
                     )
-                    .child(trajectory_panel(&self.run_detail(), &self.trajectory)),
+                    .child(trajectory_panel(
+                        &self.run_detail(),
+                        &self.trajectory,
+                        self.expanded_trajectory_id.as_deref(),
+                        cx,
+                    )),
             )
     }
 }
@@ -1469,13 +1539,22 @@ fn panel(title: &'static str, detail: &str) -> impl IntoElement {
         .child(div().text_size(px(13.0)).child(detail.to_owned()))
 }
 
-fn trajectory_panel(detail: &str, entries: &[String]) -> impl IntoElement {
+fn trajectory_panel(
+    detail: &str,
+    entries: &[TrajectoryEntry],
+    expanded_entry_id: Option<&str>,
+    cx: &mut Context<OpsMindConsole>,
+) -> impl IntoElement {
     let mut panel = div()
+        .id("trajectory-panel-scroll")
         .flex()
         .flex_col()
         .w(px(300.0))
+        .h_full()
+        .flex_none()
         .p(px(20.0))
         .gap(px(10.0))
+        .overflow_y_scroll()
         .rounded(px(14.0))
         .bg(rgba(0xffffff8f))
         .border_1()
@@ -1495,15 +1574,62 @@ fn trajectory_panel(detail: &str, entries: &[String]) -> impl IntoElement {
                 .child("开始分析后，这里会显示进展。"),
         );
     } else {
-        for entry in entries.iter().rev().take(3).rev() {
-            panel = panel.child(
-                div()
-                    .p(px(10.0))
-                    .rounded(px(8.0))
-                    .bg(rgba(0xffffffa3))
-                    .text_size(px(12.0))
-                    .child(entry.clone()),
-            );
+        for (index, entry) in entries.iter().enumerate() {
+            let entry_id = entry.id.clone();
+            let expanded = expanded_entry_id == Some(entry_id.as_str());
+            let mut entry_panel = div()
+                .id(("trajectory-entry", index))
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .p(px(10.0))
+                .rounded(px(8.0))
+                .bg(if expanded {
+                    rgba(0xe0f1fae8)
+                } else {
+                    rgba(0xffffffa3)
+                })
+                .border_1()
+                .border_color(if expanded {
+                    rgb(0x8fc3d8)
+                } else {
+                    rgba(0xffffffb8)
+                })
+                .cursor_pointer()
+                .on_click(cx.listener(move |console, _, _, cx| {
+                    console.toggle_trajectory_entry(entry_id.clone(), cx);
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .justify_between()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(
+                            div()
+                                .min_w(px(0.0))
+                                .text_size(px(12.0))
+                                .child(entry.summary.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(rgb(0x5a8da7))
+                                .child(if expanded { "收起" } else { "查看" }),
+                        ),
+                );
+            if expanded {
+                entry_panel = entry_panel.child(
+                    div()
+                        .pt(px(6.0))
+                        .border_t_1()
+                        .border_color(rgba(0xffffffb8))
+                        .text_size(px(11.0))
+                        .text_color(rgb(0x596a76))
+                        .child(entry.detail.clone()),
+                );
+            }
+            panel = panel.child(entry_panel);
         }
     }
     panel
@@ -1609,8 +1735,9 @@ mod tests {
         )
         .expect("safe trajectory event");
 
-        assert_eq!(entry, "步骤 4 · 收集证据 · 耗时 18 ms");
-        assert!(!entry.contains("secret"));
+        assert_eq!(entry.summary, "步骤 4 · 收集证据 · 耗时 18 ms");
+        assert_eq!(entry.detail, "阶段：收集证据\n涉及：服务指标\n耗时：18 ms");
+        assert!(!entry.detail.contains("secret"));
     }
 
     #[test]
