@@ -1,0 +1,17 @@
+{
+  "cloudflare-r2-credential-rotation": {
+    "observed_evidence": "2025-03-21 的对象存储事故中，例行凭证轮换后，写入操作全部失败，读取操作约有 35% 失败，元数据类操作未受影响。旧凭证删除后，生产 Gateway 出现无法向存储后端认证的现象。"
+  },
+  "openai-kubernetes-telemetry": {
+    "observed_evidence": "2024-12-11 的事故中，新遥测服务被发布到集群后，每个节点会执行成本随集群规模增长的 Kubernetes API 操作。较小的预发布集群没有暴露问题；大型集群先出现控制面异常，DNS 缓存过期后服务间解析开始失败。"
+  },
+  "github-database-failover": {
+    "observed_evidence": "2018-10-21 的事故中，网络维护造成两个美国东海岸站点短暂失联 43 秒。数据库编排系统随后把写入切换到异地站点。连接恢复后，两个站点都存在对方没有的写入，读副本延迟数小时，用户看到的数据可能不一致。"
+  },
+  "cloudflare-bgp-policy": {
+    "observed_evidence": "2022-06-21 的事故中，一项前缀通告策略变更发布到 19 个多机房架构数据中心后，关键前缀不再被通告，受影响地点难以远程访问。虽然这些地点只占网络约 4%，事故影响了约 50% 的总请求。"
+  },
+  "cloudflare-tenant-api-loop": {
+    "observed_evidence": "2025-09-12 的事故中，Dashboard 新版本发布后，对 /organizations 端点的调用数量异常增加，并且失败时会重试。Tenant API Service 随后变得过载，Dashboard 与多个 API 出现 5xx。增加 Pod 和资源后可用性有所改善，但不能完全恢复。"
+  }
+}

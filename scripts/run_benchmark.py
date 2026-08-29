@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 from pymilvus import MilvusClient  # type: ignore[import-untyped]
 
@@ -18,6 +19,7 @@ from app.harness.benchmark import (
     load_benchmark_cases,
 )
 from app.harness.snapshot import InMemoryRunArchive, PostgresRunArchive, RunArchive
+from app.models.contracts import ToolDefinition, ToolRiskLevel
 from app.observability.langsmith import create_langsmith_tracer
 from app.rag.bm25 import BM25Retriever
 from app.rag.documents import load_markdown_chunks
@@ -52,7 +54,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--knowledge-only",
         action="store_true",
-        help="仅注册知识检索工具，适用于没有本地观测数据的公开事故复盘样本",
+        help="不注册预置合成场景工具，适用于外部证据或知识检索评测",
+    )
+    parser.add_argument(
+        "--static-evidence-file",
+        type=Path,
+        help="注册只读案例证据工具；用于不写入知识库的离线诊断评测",
     )
     return parser.parse_args()
 
@@ -87,6 +94,45 @@ def create_knowledge_searcher() -> KnowledgeSearcher | None:
     )
 
 
+def register_static_evidence_tool(registry: ToolRegistry, path: Path) -> None:
+    """注册仅供离线评测读取的固定证据，避免样本进入 RAG 知识库。"""
+    raw_cases = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw_cases, dict) or not raw_cases:
+        raise ValueError("static evidence file must be a non-empty object")
+
+    evidence_by_case_id = {
+        case_id: evidence
+        for case_id, item in raw_cases.items()
+        if isinstance(case_id, str)
+        and isinstance(item, dict)
+        and isinstance((evidence := item.get("observed_evidence")), str)
+        and evidence.strip()
+    }
+    if len(evidence_by_case_id) != len(raw_cases):
+        raise ValueError("every static evidence case must define observed_evidence")
+
+    async def query_case_evidence(args: dict[str, Any]) -> dict[str, str]:
+        """返回指定评测案例的公开观测事实，不返回标注的根因。"""
+        case_id = str(args["case_id"])
+        evidence = evidence_by_case_id.get(case_id)
+        if evidence is None:
+            raise ValueError(f"unknown static evidence case: {case_id}")
+        return {"case_id": case_id, "observed_evidence": evidence}
+
+    registry.register(
+        ToolDefinition(
+            name="query_case_evidence",
+            description="读取当前离线评测案例的公开事故现象与时间线，不包含标注根因。",
+            risk_level=ToolRiskLevel.LOW,
+            read_only=True,
+            required_args=("case_id",),
+            allowed_args=("case_id",),
+            max_calls_per_run=1,
+        ),
+        query_case_evidence,
+    )
+
+
 async def main() -> int:
     """装配当前运行时并输出固定样本的端到端基准结果。"""
     args = parse_args()
@@ -94,9 +140,13 @@ async def main() -> int:
     registry = ToolRegistry()
     if not args.knowledge_only:
         register_scenario_tools(registry, create_default_scenario_store())
-    knowledge_searcher = create_knowledge_searcher()
+    knowledge_searcher = (
+        None if args.static_evidence_file is not None else create_knowledge_searcher()
+    )
     if knowledge_searcher is not None:
         register_knowledge_tools(registry, knowledge_searcher)
+    if args.static_evidence_file is not None:
+        register_static_evidence_tool(registry, args.static_evidence_file)
 
     run_archive: RunArchive | None = None
     try:
