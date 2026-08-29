@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     )
     run_archive_backend: Literal["memory", "postgres"] = "memory"
     milvus_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:19530")
+    prometheus_url: AnyHttpUrl | None = None
+    prometheus_bearer_token: SecretStr | None = None
 
     # 模型供应商配置保持可选，避免健康检查依赖真实密钥。
     llm_provider: str | None = None
@@ -82,6 +84,8 @@ class Settings(BaseSettings):
         "embedding_api_key",
         "embedding_base_url",
         "langsmith_api_key",
+        "prometheus_url",
+        "prometheus_bearer_token",
         mode="before",
     )
     @classmethod

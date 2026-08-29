@@ -97,6 +97,17 @@ ANTHROPIC_BASE_URL=https://your-compatible-endpoint
 
 供应商专用密钥优先于 `LLM_API_KEY`。未配置模型供应商时，健康检查和场景目录仍可使用；创建诊断运行会返回 `503`。
 
+### 接入实时 Prometheus 指标
+
+配置 Prometheus 地址后，Agent 会获得只读 `query_prometheus` 工具，可用 PromQL 查询实时指标。该工具只调用 `/api/v1/query`，限制单次查询长度和返回样本数；请为所用令牌配置最小只读权限。
+
+```dotenv
+PROMETHEUS_URL=https://prometheus.example.com
+PROMETHEUS_BEARER_TOKEN=your-read-only-token
+```
+
+未配置这两个字段时，应用不会注册该工具，预置场景工具仍可用于演示。
+
 ### 启用 LangSmith Trace
 
 配置有效的 LangSmith API Key 后，设置以下变量：

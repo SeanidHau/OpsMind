@@ -29,6 +29,7 @@ from app.rag.milvus_store import MilvusVectorStore
 from app.rag.search import KnowledgeSearcher
 from app.scenarios.defaults import create_default_scenario_store
 from app.tools.knowledge import register_knowledge_tools
+from app.tools.prometheus import PrometheusClient, register_prometheus_tools
 from app.tools.registry import ToolRegistry
 from app.tools.scenarios import ScenarioStore, register_scenario_tools
 
@@ -109,6 +110,18 @@ def create_app(
     # 每个应用实例使用独立注册表；工具与场景存储保持同一注入来源。
     tool_registry = ToolRegistry()
     register_scenario_tools(tool_registry, app.state.scenario_store)
+    if resolved_settings.prometheus_url is not None:
+        register_prometheus_tools(
+            tool_registry,
+            PrometheusClient(
+                base_url=str(resolved_settings.prometheus_url),
+                bearer_token=(
+                    resolved_settings.prometheus_bearer_token.get_secret_value()
+                    if resolved_settings.prometheus_bearer_token is not None
+                    else None
+                ),
+            ),
+        )
     if resolved_knowledge_searcher is not None:
         register_knowledge_tools(tool_registry, resolved_knowledge_searcher)
     app.state.tool_registry = tool_registry
