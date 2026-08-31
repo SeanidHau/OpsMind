@@ -285,6 +285,39 @@ async def test_provider_recovers_a_final_report_with_an_irrelevant_plan_item() -
 
 
 @pytest.mark.asyncio
+async def test_provider_recovers_a_plan_update_with_an_irrelevant_plan_item() -> None:
+    """模型为计划更新误带计划编号时，恢复后仍应保留有效计划内容。"""
+    raw_response = FakeRawResponse(
+        invalid_tool_calls=[
+            {
+                "args": json.dumps(
+                    {
+                        "action_type": "update_plan",
+                        "intent": "建立诊断计划",
+                        "reason": "需要先收集案例证据。",
+                        "plan_item_id": "018f4d1d-4d5d-7fe0-a7c4-a481c9d0f1c1",
+                        "plan": [{"title": "读取证据", "rationale": "确认故障现象。"}],
+                    }
+                )
+            }
+        ]
+    )
+    model = FakeChatModel(
+        {
+            "raw": raw_response,
+            "parsed": None,
+            "parsing_error": None,
+        }
+    )
+
+    invocation = await LangChainActionProvider(model).propose_action(make_state())
+
+    assert invocation.action.action_type is ActionType.UPDATE_PLAN
+    assert invocation.action.plan_item_id is None
+    assert [item.title for item in invocation.action.plan] == ["读取证据"]
+
+
+@pytest.mark.asyncio
 async def test_provider_rejects_state_without_built_context() -> None:
     """Harness 未构建 Context 时，不允许模型读取完整状态并自行决策。"""
     model = FakeChatModel(

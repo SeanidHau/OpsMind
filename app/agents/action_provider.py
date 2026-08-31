@@ -149,7 +149,7 @@ class LangChainActionProvider:
             parsing_error = response.get("parsing_error")
             parsed_action = response.get("parsed")
             if parsing_error is not None or parsed_action is None:
-                recovered_action = self._recover_final_action(response.get("raw"))
+                recovered_action = self._recover_action(response.get("raw"))
                 if recovered_action is not None:
                     return ModelInvocation(
                         action=recovered_action,
@@ -195,18 +195,23 @@ class LangChainActionProvider:
         ]
 
     @staticmethod
-    def _recover_final_action(raw_response: Any) -> AgentAction | None:
-        """忽略最终报告中无语义的计划编号，兼容部分模型的冗余字段。"""
+    def _recover_action(raw_response: Any) -> AgentAction | None:
+        """恢复模型误带无语义计划编号的动作，其他字段仍由契约校验。"""
         for args in LangChainActionProvider._raw_action_args(raw_response):
-            if args.get("action_type") != "final_answer":
-                continue
-            sanitized_args = dict(args)
-            sanitized_args.pop("plan_item_id", None)
+            sanitized_args = LangChainActionProvider._sanitize_action_args(args)
             try:
                 return AgentAction.model_validate(sanitized_args)
             except ValueError:
                 continue
         return None
+
+    @staticmethod
+    def _sanitize_action_args(args: Mapping[str, Any]) -> dict[str, Any]:
+        """移除非可执行动作中的冗余计划编号，不放宽工具和追问动作校验。"""
+        sanitized_args = dict(args)
+        if sanitized_args.get("action_type") in {"update_plan", "final_answer"}:
+            sanitized_args.pop("plan_item_id", None)
+        return sanitized_args
 
     @staticmethod
     def _raw_action_args(raw_response: Any) -> list[Mapping[str, Any]]:
